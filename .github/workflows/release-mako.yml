@@ -1,0 +1,67 @@
+name: Release MAKO vkBasalt bundle
+
+on:
+  push:
+    tags:
+      - "mako-v*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: vkbasalt-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dual-architecture build dependencies
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install --yes \
+            g++-multilib \
+            glslang-tools \
+            libx11-dev \
+            libx11-dev:i386 \
+            libvulkan-dev \
+            meson \
+            ninja-build \
+            pkg-config \
+            spirv-headers \
+            xz-utils
+
+      - name: Build and verify release archive
+        run: |
+          scripts/package-mako-release.sh \
+            "$GITHUB_REF_NAME" \
+            "dist/vkBasalt-$GITHUB_REF_NAME-linux-x86.tar.xz"
+
+      - name: Attest release archive
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/vkBasalt-${{ github.ref_name }}-linux-x86.tar.xz
+
+      - name: Publish immutable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          asset="dist/vkBasalt-$GITHUB_REF_NAME-linux-x86.tar.xz"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release already exists; refusing to replace published assets." >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            "$asset" \
+            "$asset.sha256" \
+            --verify-tag \
+            --title "MAKO vkBasalt $GITHUB_REF_NAME" \
+            --notes "Pinned dual-architecture vkBasalt runtime for MAKO. Contains verified x86_64 and i686 Vulkan-layer libraries, private manifests, checksums, source identity, and license notices."

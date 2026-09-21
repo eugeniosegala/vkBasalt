@@ -1,4 +1,7 @@
 # vkBasalt
+
+This fork publishes immutable `mako-v*` releases containing verified 64-bit and 32-bit Linux Vulkan-layer libraries for MAKO. MAKO consumes those archives by exact release tag and SHA-256 checksum and installs them only in its private user-owned directory. Upstream development remains credited to DadSchoorse and the vkBasalt contributors.
+
 vkBasalt is a Vulkan post processing layer to enhance the visual graphics of games.
 
 Currently, the build in effects are:
