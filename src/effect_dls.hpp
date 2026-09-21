@@ -23,6 +23,10 @@ namespace vkBasalt
                   std::vector<VkImage> inputImages,
                   std::vector<VkImage> outputImages,
                   Config*              pConfig);
+        void updateEffect(uint32_t imageIndex) override;
         ~DlsEffect();
+
+    private:
+        std::vector<uint64_t> appliedConfigRevisions;
     };
 } // namespace vkBasalt

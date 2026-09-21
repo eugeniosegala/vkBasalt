@@ -772,7 +772,7 @@ namespace vkBasalt
         Logger::debug("finished creating Reshade effect");
     }
 
-    void ReshadeEffect::updateEffect()
+    void ReshadeEffect::updateEffect(uint32_t imageIndex)
     {
         if (bufferSize)
         {

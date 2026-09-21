@@ -6,6 +6,7 @@
 
 namespace vkBasalt
 {
+    Logger Logger::s_instance;
 
     Logger::Logger() : m_minLevel(getMinLogLevel())
     {

@@ -33,7 +33,7 @@ namespace vkBasalt
                       Config*              pConfig,
                       std::string          effectName);
         void virtual applyEffect(uint32_t imageIndex, VkCommandBuffer commandBuffer) override;
-        void virtual updateEffect() override;
+        void virtual updateEffect(uint32_t imageIndex) override;
         void virtual useDepthImage(VkImageView depthImageView) override;
         virtual ~ReshadeEffect();
 

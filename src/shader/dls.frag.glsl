@@ -24,8 +24,11 @@
 
 layout(set=0, binding=0) uniform sampler2D img;
 
-layout (constant_id = 0) const float sharpen = 0.5;
-layout (constant_id = 1) const float denoise = 0.17;
+layout(set=1, binding=0) uniform DlsSettings
+{
+    float sharpen;
+    float denoise;
+};
 
 layout(location = 0) in vec2 textureCoord;
 layout(location = 0) out vec4 fragColor;

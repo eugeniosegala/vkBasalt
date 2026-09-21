@@ -3,6 +3,7 @@
 
 #include <sstream>
 #include <locale>
+#include <sys/stat.h>
 
 namespace vkBasalt
 {
@@ -39,7 +40,9 @@ namespace vkBasalt
                 continue;
 
             Logger::info("config file: " + cFile);
+            selectedConfigFile = cFile;
             readConfigFile(configFile);
+            captureConfigFileState();
             return;
         }
 
@@ -48,7 +51,74 @@ namespace vkBasalt
 
     Config::Config(const Config& other)
     {
-        this->options = other.options;
+        this->options                       = other.options;
+        this->selectedConfigFile            = other.selectedConfigFile;
+        this->configDevice                  = other.configDevice;
+        this->configInode                   = other.configInode;
+        this->configSize                    = other.configSize;
+        this->configModifiedSeconds         = other.configModifiedSeconds;
+        this->configModifiedNanoseconds     = other.configModifiedNanoseconds;
+        this->configFileStateValid          = other.configFileStateValid;
+        this->configRevision                = other.configRevision;
+    }
+
+    void Config::captureConfigFileState()
+    {
+        struct stat state;
+        if (selectedConfigFile.empty() || stat(selectedConfigFile.c_str(), &state) != 0)
+        {
+            configFileStateValid = false;
+            return;
+        }
+
+        configDevice              = static_cast<uint64_t>(state.st_dev);
+        configInode               = static_cast<uint64_t>(state.st_ino);
+        configSize                = static_cast<uint64_t>(state.st_size);
+        configModifiedSeconds     = static_cast<int64_t>(state.st_mtim.tv_sec);
+        configModifiedNanoseconds = static_cast<int64_t>(state.st_mtim.tv_nsec);
+        configFileStateValid      = true;
+    }
+
+    bool Config::configFileChanged() const
+    {
+        struct stat state;
+        if (selectedConfigFile.empty() || stat(selectedConfigFile.c_str(), &state) != 0)
+            return false;
+
+        return !configFileStateValid
+               || configDevice != static_cast<uint64_t>(state.st_dev)
+               || configInode != static_cast<uint64_t>(state.st_ino)
+               || configSize != static_cast<uint64_t>(state.st_size)
+               || configModifiedSeconds != static_cast<int64_t>(state.st_mtim.tv_sec)
+               || configModifiedNanoseconds != static_cast<int64_t>(state.st_mtim.tv_nsec);
+    }
+
+    bool Config::reloadIfChanged()
+    {
+        if (!configFileChanged())
+            return false;
+
+        Config updated;
+        if (updated.selectedConfigFile != selectedConfigFile)
+        {
+            Logger::warn("config reload ignored because the selected config path changed");
+            return false;
+        }
+
+        const uint64_t nextRevision = configRevision + 1;
+        *this = updated;
+        configRevision = nextRevision;
+        return true;
+    }
+
+    const std::string& Config::configFilePath() const
+    {
+        return selectedConfigFile;
+    }
+
+    uint64_t Config::revision() const
+    {
+        return configRevision;
     }
 
     void Config::readConfigFile(std::ifstream& stream)
@@ -99,7 +169,7 @@ namespace vkBasalt
 
     BREAK:
 
-        if (!key.empty() && !value.empty())
+        if (!key.empty() && foundEquals)
         {
             Logger::info(key + " = " + value);
             options[key] = value;

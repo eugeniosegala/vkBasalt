@@ -14,6 +14,7 @@ endif
 
 if get_option('with_so')
     subdir('src')
+    subdir('tests')
 endif
 
 if get_option('with_json')

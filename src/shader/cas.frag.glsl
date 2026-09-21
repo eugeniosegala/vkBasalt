@@ -18,7 +18,10 @@
 
 layout(set=0, binding=0) uniform sampler2D img;
 
-layout (constant_id = 0) const float sharpness = 0.4;
+layout(set=1, binding=0) uniform CasSettings
+{
+    float sharpness;
+};
 
 layout(location = 0) in vec2 textureCoord;
 layout(location = 0) out vec4 fragColor;

@@ -1,6 +1,7 @@
 #include "effect_cas.hpp"
 
 #include <cstring>
+#include <limits>
 
 #include "image_view.hpp"
 #include "descriptor_set.hpp"
@@ -15,6 +16,12 @@
 
 namespace vkBasalt
 {
+    struct alignas(16) CasSettings
+    {
+        float sharpness;
+        float padding[3];
+    };
+
     CasEffect::CasEffect(LogicalDevice*       pLogicalDevice,
                          VkFormat             format,
                          VkExtent2D           imageExtent,
@@ -23,26 +30,24 @@ namespace vkBasalt
                          Config*              pConfig)
     {
 
-        float sharpness = pConfig->getOption<float>("casSharpness", 0.4f);
-
         vertexCode   = full_screen_triangle_vert;
         fragmentCode = cas_frag;
 
-        VkSpecializationMapEntry sharpnessMapEntry;
-        sharpnessMapEntry.constantID = 0;
-        sharpnessMapEntry.offset     = 0;
-        sharpnessMapEntry.size       = sizeof(float);
-
-        VkSpecializationInfo fragmentSpecializationInfo;
-        fragmentSpecializationInfo.mapEntryCount = 1;
-        fragmentSpecializationInfo.pMapEntries   = &sharpnessMapEntry;
-        fragmentSpecializationInfo.dataSize      = sizeof(float);
-        fragmentSpecializationInfo.pData         = &sharpness;
-
         pVertexSpecInfo   = nullptr;
-        pFragmentSpecInfo = &fragmentSpecializationInfo;
+        pFragmentSpecInfo = nullptr;
 
-        init(pLogicalDevice, format, imageExtent, inputImages, outputImages, pConfig);
+        init(pLogicalDevice, format, imageExtent, inputImages, outputImages, pConfig, sizeof(CasSettings));
+        appliedConfigRevisions.assign(inputImages.size(), std::numeric_limits<uint64_t>::max());
+    }
+    void CasEffect::updateEffect(uint32_t imageIndex)
+    {
+        if (imageIndex >= appliedConfigRevisions.size() || appliedConfigRevisions[imageIndex] == pConfig->revision())
+            return;
+
+        CasSettings settings = {};
+        settings.sharpness = pConfig->getOption<float>("casSharpness", 0.4f);
+        writeDynamicUniform(imageIndex, &settings, sizeof(settings));
+        appliedConfigRevisions[imageIndex] = pConfig->revision();
     }
     CasEffect::~CasEffect()
     {

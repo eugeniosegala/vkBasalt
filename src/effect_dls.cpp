@@ -1,6 +1,7 @@
 #include "effect_dls.hpp"
 
 #include <cstring>
+#include <limits>
 
 #include "image_view.hpp"
 #include "descriptor_set.hpp"
@@ -15,6 +16,13 @@
 
 namespace vkBasalt
 {
+    struct alignas(16) DlsSettings
+    {
+        float sharpness;
+        float denoise;
+        float padding[2];
+    };
+
     DlsEffect::DlsEffect(LogicalDevice*       pLogicalDevice,
                          VkFormat             format,
                          VkExtent2D           imageExtent,
@@ -22,32 +30,25 @@ namespace vkBasalt
                          std::vector<VkImage> outputImages,
                          Config*              pConfig)
     {
-        float sharpness = pConfig->getOption<float>("dlsSharpness", 0.5f);
-        float denoise   = pConfig->getOption<float>("dlsDenoise", 0.17f);
-
-        float specData[2] = {sharpness, denoise};
-
         vertexCode   = full_screen_triangle_vert;
         fragmentCode = dls_frag;
 
-        VkSpecializationMapEntry mapEntries[2];
-        mapEntries[0].constantID = 0;
-        mapEntries[0].offset     = 0;
-        mapEntries[0].size       = sizeof(float);
-        mapEntries[1].constantID = 1;
-        mapEntries[1].offset     = sizeof(float);
-        mapEntries[1].size       = sizeof(float);
-
-        VkSpecializationInfo fragmentSpecializationInfo;
-        fragmentSpecializationInfo.mapEntryCount = 1;
-        fragmentSpecializationInfo.pMapEntries   = mapEntries;
-        fragmentSpecializationInfo.dataSize      = sizeof(float) * 2;
-        fragmentSpecializationInfo.pData         = specData;
-
         pVertexSpecInfo   = nullptr;
-        pFragmentSpecInfo = &fragmentSpecializationInfo;
+        pFragmentSpecInfo = nullptr;
 
-        init(pLogicalDevice, format, imageExtent, inputImages, outputImages, pConfig);
+        init(pLogicalDevice, format, imageExtent, inputImages, outputImages, pConfig, sizeof(DlsSettings));
+        appliedConfigRevisions.assign(inputImages.size(), std::numeric_limits<uint64_t>::max());
+    }
+    void DlsEffect::updateEffect(uint32_t imageIndex)
+    {
+        if (imageIndex >= appliedConfigRevisions.size() || appliedConfigRevisions[imageIndex] == pConfig->revision())
+            return;
+
+        DlsSettings settings = {};
+        settings.sharpness = pConfig->getOption<float>("dlsSharpness", 0.5f);
+        settings.denoise = pConfig->getOption<float>("dlsDenoise", 0.17f);
+        writeDynamicUniform(imageIndex, &settings, sizeof(settings));
+        appliedConfigRevisions[imageIndex] = pConfig->revision();
     }
     DlsEffect::~DlsEffect()
     {

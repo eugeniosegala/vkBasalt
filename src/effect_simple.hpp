@@ -43,6 +43,12 @@ namespace vkBasalt
         VkFormat                     format;
         VkSampler                    sampler;
         Config*                      pConfig;
+        VkDescriptorSetLayout        dynamicUniformDescriptorSetLayout = VK_NULL_HANDLE;
+        std::vector<VkBuffer>         dynamicUniformBuffers;
+        std::vector<VkDeviceMemory>   dynamicUniformMemories;
+        std::vector<void*>            dynamicUniformMappings;
+        std::vector<VkDescriptorSet>  dynamicUniformDescriptorSets;
+        VkDeviceSize                  dynamicUniformSize = 0;
         std::vector<uint32_t>        vertexCode;
         std::vector<uint32_t>        fragmentCode;
         VkSpecializationInfo*        pVertexSpecInfo;
@@ -56,7 +62,9 @@ namespace vkBasalt
                   VkExtent2D           imageExtent,
                   std::vector<VkImage> inputImages,
                   std::vector<VkImage> outputImages,
-                  Config*              pConfig);
+                  Config*              pConfig,
+                  VkDeviceSize         dynamicUniformSize = 0);
+        void writeDynamicUniform(uint32_t imageIndex, const void* data, VkDeviceSize size);
     };
 } // namespace vkBasalt
 

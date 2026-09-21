@@ -22,7 +22,8 @@ namespace vkBasalt
                             VkExtent2D           imageExtent,
                             std::vector<VkImage> inputImages,
                             std::vector<VkImage> outputImages,
-                            Config*              pConfig)
+                            Config*              pConfig,
+                            VkDeviceSize         dynamicUniformSize)
     {
         Logger::debug("in creating SimpleEffect");
 
@@ -32,6 +33,7 @@ namespace vkBasalt
         this->inputImages    = inputImages;
         this->outputImages   = outputImages;
         this->pConfig        = pConfig;
+        this->dynamicUniformSize = dynamicUniformSize;
 
         inputImageViews = createImageViews(pLogicalDevice, format, inputImages);
         Logger::debug("created input ImageViews");
@@ -48,6 +50,16 @@ namespace vkBasalt
         imagePoolSize.descriptorCount = inputImages.size() + 10;
 
         std::vector<VkDescriptorPoolSize> poolSizes = {imagePoolSize};
+        if (dynamicUniformSize > 0)
+        {
+            VkDescriptorPoolSize uniformPoolSize;
+            uniformPoolSize.type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            uniformPoolSize.descriptorCount = inputImages.size();
+            poolSizes.push_back(uniformPoolSize);
+
+            dynamicUniformDescriptorSetLayout = createUniformBufferDescriptorSetLayout(pLogicalDevice);
+            descriptorSetLayouts.push_back(dynamicUniformDescriptorSetLayout);
+        }
 
         descriptorPool = createDescriptorPool(pLogicalDevice, poolSizes);
         Logger::debug("created descriptorPool");
@@ -73,6 +85,28 @@ namespace vkBasalt
 
         imageDescriptorSets = allocateAndWriteImageSamplerDescriptorSets(
             pLogicalDevice, descriptorPool, imageSamplerDescriptorSetLayout, {sampler}, std::vector<std::vector<VkImageView>>(1, inputImageViews));
+
+        if (dynamicUniformSize > 0)
+        {
+            dynamicUniformBuffers.resize(inputImages.size());
+            dynamicUniformMemories.resize(inputImages.size());
+            dynamicUniformMappings.resize(inputImages.size());
+            dynamicUniformDescriptorSets.reserve(inputImages.size());
+            for (uint32_t i = 0; i < inputImages.size(); i++)
+            {
+                createBuffer(pLogicalDevice,
+                             dynamicUniformSize,
+                             VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                             dynamicUniformBuffers[i],
+                             dynamicUniformMemories[i]);
+                VkResult result = pLogicalDevice->vkd.MapMemory(
+                    pLogicalDevice->device, dynamicUniformMemories[i], 0, dynamicUniformSize, 0, &dynamicUniformMappings[i]);
+                ASSERT_VULKAN(result);
+                dynamicUniformDescriptorSets.push_back(writeBufferDescriptorSet(
+                    pLogicalDevice, descriptorPool, dynamicUniformDescriptorSetLayout, dynamicUniformBuffers[i]));
+            }
+        }
 
         framebuffers = createFramebuffers(pLogicalDevice, renderPass, imageExtent, {outputImageViews});
     }
@@ -138,6 +172,18 @@ namespace vkBasalt
             commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &(imageDescriptorSets[imageIndex]), 0, nullptr);
         Logger::debug("after binding image sampler");
 
+        if (!dynamicUniformDescriptorSets.empty())
+        {
+            pLogicalDevice->vkd.CmdBindDescriptorSets(commandBuffer,
+                                                       VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                       pipelineLayout,
+                                                       1,
+                                                       1,
+                                                       &(dynamicUniformDescriptorSets[imageIndex]),
+                                                       0,
+                                                       nullptr);
+        }
+
         pLogicalDevice->vkd.CmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
         Logger::debug("after bind pipeliene");
 
@@ -159,6 +205,14 @@ namespace vkBasalt
                                                &secondBarrier);
         Logger::debug("after the second pipeline barrier");
     }
+
+    void SimpleEffect::writeDynamicUniform(uint32_t imageIndex, const void* data, VkDeviceSize size)
+    {
+        if (imageIndex >= dynamicUniformMappings.size() || size > dynamicUniformSize)
+            return;
+        std::memcpy(dynamicUniformMappings[imageIndex], data, size);
+    }
+
     SimpleEffect::~SimpleEffect()
     {
         Logger::debug("destroying SimpleEffect " + convertToString(this));
@@ -166,10 +220,18 @@ namespace vkBasalt
         pLogicalDevice->vkd.DestroyPipelineLayout(pLogicalDevice->device, pipelineLayout, nullptr);
         pLogicalDevice->vkd.DestroyRenderPass(pLogicalDevice->device, renderPass, nullptr);
         pLogicalDevice->vkd.DestroyDescriptorSetLayout(pLogicalDevice->device, imageSamplerDescriptorSetLayout, nullptr);
+        if (dynamicUniformDescriptorSetLayout != VK_NULL_HANDLE)
+            pLogicalDevice->vkd.DestroyDescriptorSetLayout(pLogicalDevice->device, dynamicUniformDescriptorSetLayout, nullptr);
         pLogicalDevice->vkd.DestroyShaderModule(pLogicalDevice->device, vertexModule, nullptr);
         pLogicalDevice->vkd.DestroyShaderModule(pLogicalDevice->device, fragmentModule, nullptr);
 
         pLogicalDevice->vkd.DestroyDescriptorPool(pLogicalDevice->device, descriptorPool, nullptr);
+        for (uint32_t i = 0; i < dynamicUniformBuffers.size(); i++)
+        {
+            pLogicalDevice->vkd.UnmapMemory(pLogicalDevice->device, dynamicUniformMemories[i]);
+            pLogicalDevice->vkd.DestroyBuffer(pLogicalDevice->device, dynamicUniformBuffers[i], nullptr);
+            pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, dynamicUniformMemories[i], nullptr);
+        }
         for (unsigned int i = 0; i < framebuffers.size(); i++)
         {
             pLogicalDevice->vkd.DestroyFramebuffer(pLogicalDevice->device, framebuffers[i], nullptr);

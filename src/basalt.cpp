@@ -8,6 +8,8 @@
 #include <string>
 #include <memory>
 #include <cstring>
+#include <chrono>
+#include <cstdlib>
 
 #include "util.hpp"
 #include "keyboard_input.hpp"
@@ -51,8 +53,6 @@ namespace vkBasalt
 {
     std::shared_ptr<Config> pConfig = nullptr;
 
-    Logger Logger::s_instance;
-
     // layer book-keeping information, to store dispatch tables by key
     std::unordered_map<void*, InstanceDispatch>                           instanceDispatchMap;
     std::unordered_map<void*, VkInstance>                                 instanceMap;
@@ -71,6 +71,31 @@ namespace vkBasalt
     void* GetKey(DispatchableType inst)
     {
         return *(void**) inst;
+    }
+
+    bool liveConfigReloadEnabled()
+    {
+        static const bool enabled = []() {
+            const char* value = std::getenv("VKBASALT_CONFIG_RELOAD");
+            return value != nullptr && (std::strcmp(value, "1") == 0 || std::strcmp(value, "true") == 0
+                                        || std::strcmp(value, "True") == 0);
+        }();
+        return enabled;
+    }
+
+    void reloadConfigIfChanged()
+    {
+        if (!liveConfigReloadEnabled() || pConfig == nullptr || pConfig->configFilePath().empty())
+            return;
+
+        static auto nextCheck = std::chrono::steady_clock::time_point::min();
+        const auto now = std::chrono::steady_clock::now();
+        if (now < nextCheck)
+            return;
+        nextCheck = now + std::chrono::milliseconds(250);
+
+        if (pConfig->reloadIfChanged())
+            Logger::info("reloaded live options from " + pConfig->configFilePath());
     }
 
     VkResult VKAPI_CALL vkBasalt_CreateInstance(const VkInstanceCreateInfo*  pCreateInfo,
@@ -544,6 +569,8 @@ namespace vkBasalt
     {
         scoped_lock l(globalLock);
 
+        reloadConfigIfChanged();
+
         static uint32_t keySymbol = convertToKeySym(pConfig->getOption<std::string>("toggleKey", "Home"));
 
         static bool pressed       = false;
@@ -577,7 +604,7 @@ namespace vkBasalt
 
             for (auto& effect : pLogicalSwapchain->effects)
             {
-                effect->updateEffect();
+                effect->updateEffect(index);
             }
 
             VkSubmitInfo submitInfo;
