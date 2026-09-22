@@ -10,7 +10,7 @@ if [[ ! "$release_tag" =~ ^mako-v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$ ]]; then
     exit 2
 fi
 
-for command in git meson ninja glslangValidator readelf strip tar sha256sum xz; do
+for command in git meson ninja glslangValidator pkg-config readelf strip tar sha256sum xz; do
     if ! command -v "$command" >/dev/null 2>&1; then
         echo "Required command not found: $command" >&2
         exit 1
@@ -29,6 +29,38 @@ stage64="$work_root/stage64"
 stage32="$work_root/stage32"
 payload="$work_root/payload"
 
+resolve_pkg_config32() {
+    local candidate
+    for candidate in /usr/lib32/pkgconfig /usr/lib/i386-linux-gnu/pkgconfig; do
+        if [[ -f "$candidate/x11.pc" ]]; then
+            printf '%s\n' "$candidate"
+            return
+        fi
+    done
+
+    if [[ -f /usr/lib32/libX11.so ]] && pkg-config --exists x11; then
+        candidate="$work_root/pkgconfig32"
+        mkdir -p "$candidate"
+        pkg-config --variable=pcfiledir x11 >/dev/null
+        sed 's|^libdir=.*|libdir=/usr/lib32|' \
+            "$(pkg-config --variable=pcfiledir x11)/x11.pc" \
+            > "$candidate/x11.pc"
+        printf '%s\n' "$candidate"
+        return
+    fi
+
+    echo "Could not locate 32-bit X11 pkg-config metadata" >&2
+    exit 1
+}
+
+pkg_config32="$(resolve_pkg_config32)"
+pkg_config32_libdir="$pkg_config32:/usr/share/pkgconfig"
+resolved_x11_libdir="$(PKG_CONFIG_LIBDIR="$pkg_config32_libdir" pkg-config --variable=libdir x11)"
+if [[ "$resolved_x11_libdir" != /usr/lib32 && "$resolved_x11_libdir" != /usr/lib/i386-linux-gnu ]]; then
+    echo "32-bit X11 resolved to the wrong library directory: $resolved_x11_libdir" >&2
+    exit 1
+fi
+
 meson setup "$build64" "$repo_root" \
     --buildtype=release \
     --prefix=/usr \
@@ -38,7 +70,7 @@ meson compile -C "$build64"
 DESTDIR="$stage64" meson install -C "$build64"
 
 ASFLAGS=--32 CFLAGS=-m32 CXXFLAGS=-m32 LDFLAGS=-m32 \
-PKG_CONFIG_PATH=/usr/lib/i386-linux-gnu/pkgconfig \
+PKG_CONFIG_LIBDIR="$pkg_config32_libdir" \
 meson setup "$build32" "$repo_root" \
     --buildtype=release \
     --prefix=/usr \
