@@ -77,6 +77,16 @@ namespace vkBasalt
         }
         return key;
     }
+
+    inline bool shouldRetainEffectGraph(const std::string& graphKey,
+                                        const std::string& requestedKey)
+    {
+        // The empty graph is the keyboard-toggle fallback. Every other graph
+        // can be rebuilt after a live selection change, so retaining it would
+        // keep effect-owned images and pipelines resident for the lifetime of
+        // the swapchain.
+        return graphKey.empty() || graphKey == requestedKey;
+    }
 } // namespace vkBasalt
 
 #endif // LIVE_EFFECTS_HPP_INCLUDED

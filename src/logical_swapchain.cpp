@@ -2,22 +2,26 @@
 
 namespace vkBasalt
 {
+    void EffectGraph::destroy(LogicalDevice* pLogicalDevice)
+    {
+        if (!commandBuffers.empty())
+        {
+            pLogicalDevice->vkd.FreeCommandBuffers(pLogicalDevice->device,
+                                                   pLogicalDevice->commandPool,
+                                                   commandBuffers.size(),
+                                                   commandBuffers.data());
+            commandBuffers.clear();
+        }
+        effects.clear();
+    }
+
     void LogicalSwapchain::destroy()
     {
         if (imageCount > 0)
         {
             activeEffectGraph.reset();
             for (auto& [key, graph] : effectGraphs)
-            {
-                graph->effects.clear();
-                if (!graph->commandBuffers.empty())
-                {
-                    pLogicalDevice->vkd.FreeCommandBuffers(pLogicalDevice->device,
-                                                           pLogicalDevice->commandPool,
-                                                           graph->commandBuffers.size(),
-                                                           graph->commandBuffers.data());
-                }
-            }
+                graph->destroy(pLogicalDevice);
             effectGraphs.clear();
             Logger::debug("after free commandbuffer");
 

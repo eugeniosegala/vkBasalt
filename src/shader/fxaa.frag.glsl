@@ -1,7 +1,7 @@
 #version 450
 #extension  GL_GOOGLE_include_directive : require
 
-#define FXAA_QUALITY_PRESET 39
+#define FXAA_QUALITY_PRESET 12 // Default medium-dither preset.
 #define FXAA_GLSL_130 1
 #define FXAA_PC 1
 #define FXAA_GREEN_AS_LUMA 1

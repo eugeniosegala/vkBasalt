@@ -42,5 +42,9 @@ int main()
 
     assert(vkBasalt::effectGraphKey(Effects{}) == "");
     assert(vkBasalt::effectGraphKey(Effects{"fxaa", "cas"}) == "fxaa:cas");
+    assert(vkBasalt::shouldRetainEffectGraph("", "fxaa:cas"));
+    assert(vkBasalt::shouldRetainEffectGraph("fxaa:cas", "fxaa:cas"));
+    assert(!vkBasalt::shouldRetainEffectGraph("smaa:cas", "fxaa:cas"));
+    assert(!vkBasalt::shouldRetainEffectGraph("makoVibrance:cas", "fxaa:cas"));
     return 0;
 }

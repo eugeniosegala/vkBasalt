@@ -113,9 +113,9 @@ namespace vkBasalt
         };
 
         SmaaOptions smaaOptions;
-        smaaOptions.threshold          = pConfig->getOption<float>("smaaThreshold", 0.05f);
-        smaaOptions.maxSearchSteps     = pConfig->getOption<int32_t>("smaaMaxSearchSteps", 32);
-        smaaOptions.maxSearchStepsDiag = pConfig->getOption<int32_t>("smaaMaxSearchStepsDiag", 16);
+        smaaOptions.threshold          = pConfig->getOption<float>("smaaThreshold", 0.1f);
+        smaaOptions.maxSearchSteps     = pConfig->getOption<int32_t>("smaaMaxSearchSteps", 8);
+        smaaOptions.maxSearchStepsDiag = pConfig->getOption<int32_t>("smaaMaxSearchStepsDiag", 0);
         smaaOptions.cornerRounding     = pConfig->getOption<int32_t>("smaaCornerRounding", 25);
 
         createShaderModule(pLogicalDevice, smaa_edge_vert, &edgeVertexModule);
@@ -349,9 +349,6 @@ namespace vkBasalt
         pLogicalDevice->vkd.DestroyShaderModule(pLogicalDevice->device, neignborFragmentModule, nullptr);
 
         pLogicalDevice->vkd.DestroyDescriptorPool(pLogicalDevice->device, descriptorPool, nullptr);
-        pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, imageMemory, nullptr);
-        pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, areaMemory, nullptr);
-        pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, searchMemory, nullptr);
         for (unsigned int i = 0; i < edgeFramebuffers.size(); i++)
         {
             pLogicalDevice->vkd.DestroyFramebuffer(pLogicalDevice->device, edgeFramebuffers[i], nullptr);
@@ -369,6 +366,10 @@ namespace vkBasalt
         pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, areaImage, nullptr);
         pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, searchImageView, nullptr);
         pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, searchImage, nullptr);
+
+        pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, imageMemory, nullptr);
+        pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, areaMemory, nullptr);
+        pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, searchMemory, nullptr);
 
         pLogicalDevice->vkd.DestroySampler(pLogicalDevice->device, sampler, nullptr);
     }

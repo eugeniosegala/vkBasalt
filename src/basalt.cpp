@@ -225,24 +225,55 @@ namespace vkBasalt
 
     void updateLiveEffectGraph(LogicalSwapchain* pLogicalSwapchain)
     {
-        if (pLogicalSwapchain->effectSelectionRevision == pConfig->revision())
+        const uint64_t revision = pConfig->revision();
+        if (pLogicalSwapchain->effectSelectionRevision == revision)
             return;
-        pLogicalSwapchain->effectSelectionRevision = pConfig->revision();
 
         const auto requested = pConfig->getOption<std::vector<std::string>>("effects", {"cas"});
         if (pLogicalSwapchain->activeEffectGraph == nullptr
             || effectGraphKey(requested) == effectGraphKey(pLogicalSwapchain->activeEffectGraph->effectNames))
+        {
+            pLogicalSwapchain->effectSelectionRevision = revision;
             return;
+        }
 
         if (!canChangeEffectSelectionLive(pLogicalSwapchain->activeEffectGraph->effectNames, requested))
         {
+            pLogicalSwapchain->effectSelectionRevision = revision;
             Logger::info("effect graph change requires a restart because custom effects changed");
             return;
         }
 
-        pLogicalSwapchain->activeEffectGraph = buildEffectGraph(pLogicalSwapchain, requested);
         const auto key = effectGraphKey(requested);
+        LogicalDevice* pLogicalDevice = pLogicalSwapchain->pLogicalDevice;
+        const VkResult idleResult = pLogicalDevice->vkd.QueueWaitIdle(pLogicalDevice->queue);
+        if (idleResult != VK_SUCCESS)
+        {
+            Logger::warn("could not retire the previous live effect graph because the graphics queue did not become idle");
+            return;
+        }
+
+        pLogicalSwapchain->effectSelectionRevision = revision;
+        pLogicalSwapchain->activeEffectGraph.reset();
+        size_t retiredGraphs = 0;
+        for (auto graph = pLogicalSwapchain->effectGraphs.begin();
+             graph != pLogicalSwapchain->effectGraphs.end();)
+        {
+            if (shouldRetainEffectGraph(graph->first, key))
+            {
+                ++graph;
+                continue;
+            }
+
+            graph->second->destroy(pLogicalDevice);
+            graph = pLogicalSwapchain->effectGraphs.erase(graph);
+            retiredGraphs++;
+        }
+
+        pLogicalSwapchain->activeEffectGraph = buildEffectGraph(pLogicalSwapchain, requested);
         Logger::info("activated live effect graph: " + (key.empty() ? std::string("off") : key));
+        if (retiredGraphs > 0)
+            Logger::info("retired " + std::to_string(retiredGraphs) + " inactive live effect graph(s)");
     }
 
     void rerecordEffectGraphs(LogicalSwapchain* pLogicalSwapchain,

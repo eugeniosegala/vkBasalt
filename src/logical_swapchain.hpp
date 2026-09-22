@@ -21,6 +21,8 @@ namespace vkBasalt
         std::vector<std::string>            effectNames;
         std::vector<std::shared_ptr<Effect>> effects;
         std::vector<VkCommandBuffer>         commandBuffers;
+
+        void destroy(LogicalDevice* pLogicalDevice);
     };
 
     // for each swapchain, we have the Images and the other stuff we need to execute the compute shader
