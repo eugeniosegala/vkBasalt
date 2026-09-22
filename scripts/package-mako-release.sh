@@ -42,7 +42,8 @@ resolve_pkg_config32() {
         candidate="$work_root/pkgconfig32"
         mkdir -p "$candidate"
         pkg-config --variable=pcfiledir x11 >/dev/null
-        sed 's|^libdir=.*|libdir=/usr/lib32|' \
+        sed -e 's|^libdir=.*|libdir=/usr/lib32|' \
+            -e '/^Requires\.private:/d' \
             "$(pkg-config --variable=pcfiledir x11)/x11.pc" \
             > "$candidate/x11.pc"
         printf '%s\n' "$candidate"
