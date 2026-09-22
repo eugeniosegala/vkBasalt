@@ -140,7 +140,7 @@ namespace vkBasalt
         if (effectName == "cas")
             return std::make_shared<CasEffect>(
                 pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get());
-        if (effectName == "deband")
+        if (effectName == "deband" || effectName == "makoDeband")
             return std::make_shared<DebandEffect>(
                 pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get());
         if (effectName == "smaa")

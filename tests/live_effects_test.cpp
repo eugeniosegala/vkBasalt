@@ -15,11 +15,19 @@ int main()
     assert(vkBasalt::validMakoEffectSelection(Effects{"smaa"}));
     assert(vkBasalt::validMakoEffectSelection(Effects{"fxaa", "cas"}));
     assert(vkBasalt::validMakoEffectSelection(Effects{"smaa", "dls"}));
+    assert(vkBasalt::validMakoEffectSelection(Effects{"makoVibrance"}));
+    assert(vkBasalt::validMakoEffectSelection(Effects{"fxaa", "makoCurves", "dls"}));
+    assert(vkBasalt::validMakoEffectSelection(Effects{"makoDeband", "cas"}));
     assert(!vkBasalt::validMakoEffectSelection(Effects{"cas", "fxaa"}));
     assert(!vkBasalt::validMakoEffectSelection(Effects{"fxaa", "smaa"}));
     assert(!vkBasalt::validMakoEffectSelection(Effects{"cas", "dls"}));
+    assert(!vkBasalt::validMakoEffectSelection(Effects{"makoCurves", "makoVibrance"}));
+    assert(!vkBasalt::validMakoEffectSelection(Effects{"cas", "makoDeband"}));
 
     assert(vkBasalt::canChangeEffectSelectionLive(Effects{"cas"}, Effects{"smaa", "dls"}));
+    assert(vkBasalt::canChangeEffectSelectionLive(Effects{"cas"}, Effects{"makoVibrance", "cas"}));
+    assert(vkBasalt::canChangeEffectSelectionLive(Effects{"makoVibrance", "cas"}, Effects{"makoCurves", "dls"}));
+    assert(vkBasalt::canChangeEffectSelectionLive(Effects{"makoCurves"}, Effects{"makoDeband"}));
     assert(vkBasalt::canChangeEffectSelectionLive(Effects{"Custom@Tone", "cas"}, Effects{"Custom@Tone", "fxaa", "dls"}));
     assert(!vkBasalt::canChangeEffectSelectionLive(Effects{"Custom@Tone", "cas"}, Effects{"Other@Tone", "fxaa", "dls"}));
     assert(!vkBasalt::canChangeEffectSelectionLive(Effects{"cas"}, Effects{"cas", "fxaa"}));

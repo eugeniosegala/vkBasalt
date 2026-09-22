@@ -8,7 +8,8 @@ namespace vkBasalt
 {
     inline bool isMakoControlledEffect(const std::string& effect)
     {
-        return effect == "fxaa" || effect == "smaa" || effect == "cas" || effect == "dls";
+        return effect == "fxaa" || effect == "smaa" || effect == "cas" || effect == "dls"
+               || effect == "makoVibrance" || effect == "makoCurves" || effect == "makoDeband";
     }
 
     inline std::vector<std::string> makoControlledEffects(const std::vector<std::string>& effects)
@@ -35,15 +36,24 @@ namespace vkBasalt
 
     inline bool validMakoEffectSelection(const std::vector<std::string>& effects)
     {
-        const auto controlled = makoControlledEffects(effects);
-        if (controlled.size() > 2)
-            return false;
-        if (controlled.empty())
-            return true;
-        if (controlled.size() == 1)
-            return true;
-        return (controlled[0] == "fxaa" || controlled[0] == "smaa")
-               && (controlled[1] == "cas" || controlled[1] == "dls");
+        int lastCategory = -1;
+        for (const auto& effect : effects)
+        {
+            int category = -1;
+            if (effect == "fxaa" || effect == "smaa")
+                category = 0;
+            else if (effect == "makoVibrance" || effect == "makoCurves" || effect == "makoDeband")
+                category = 1;
+            else if (effect == "cas" || effect == "dls")
+                category = 2;
+            else
+                continue;
+
+            if (category <= lastCategory)
+                return false;
+            lastCategory = category;
+        }
+        return true;
     }
 
     inline bool canChangeEffectSelectionLive(const std::vector<std::string>& active,

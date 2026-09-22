@@ -1132,7 +1132,9 @@ namespace vkBasalt
         preprocessor.add_macro_definition("BUFFER_RCP_WIDTH", "(1.0 / BUFFER_WIDTH)");
         preprocessor.add_macro_definition("BUFFER_RCP_HEIGHT", "(1.0 / BUFFER_HEIGHT)");
         preprocessor.add_macro_definition("BUFFER_COLOR_DEPTH", (inputOutputFormatUNORM == VK_FORMAT_A2R10G10B10_UNORM_PACK32) ? "10" : "8");
-        preprocessor.add_include_path(pConfig->getOption<std::string>("reshadeIncludePath"));
+        const auto includePath = pConfig->getOption<std::string>("reshadeIncludePath");
+        if (!includePath.empty())
+            preprocessor.add_include_path(includePath);
         if (!preprocessor.append_file(pConfig->getOption<std::string>(effectName)))
         {
             Logger::err("failed to load shader file: " + pConfig->getOption<std::string>(effectName));
