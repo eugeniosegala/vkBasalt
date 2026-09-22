@@ -9,7 +9,9 @@ namespace vkBasalt
     inline bool isMakoControlledEffect(const std::string& effect)
     {
         return effect == "fxaa" || effect == "smaa" || effect == "cas" || effect == "dls"
-               || effect == "makoVibrance" || effect == "makoCurves" || effect == "makoDeband";
+               || effect == "makoVibrance" || effect == "makoCurves" || effect == "makoDeband"
+               || effect == "makoTechnicolor" || effect == "makoSepia"
+               || effect == "makoMonochrome" || effect == "makoVignette";
     }
 
     inline std::vector<std::string> makoControlledEffects(const std::vector<std::string>& effects)
@@ -42,7 +44,9 @@ namespace vkBasalt
             int category = -1;
             if (effect == "fxaa" || effect == "smaa")
                 category = 0;
-            else if (effect == "makoVibrance" || effect == "makoCurves" || effect == "makoDeband")
+            else if (effect == "makoVibrance" || effect == "makoCurves" || effect == "makoDeband"
+                     || effect == "makoTechnicolor" || effect == "makoSepia"
+                     || effect == "makoMonochrome" || effect == "makoVignette")
                 category = 1;
             else if (effect == "cas" || effect == "dls")
                 category = 2;
