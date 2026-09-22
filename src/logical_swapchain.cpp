@@ -6,21 +6,38 @@ namespace vkBasalt
     {
         if (imageCount > 0)
         {
-            effects.clear();
-            defaultTransfer.reset();
-
-            pLogicalDevice->vkd.FreeCommandBuffers(
-                pLogicalDevice->device, pLogicalDevice->commandPool, commandBuffersEffect.size(), commandBuffersEffect.data());
-            pLogicalDevice->vkd.FreeCommandBuffers(
-                pLogicalDevice->device, pLogicalDevice->commandPool, commandBuffersNoEffect.size(), commandBuffersNoEffect.data());
+            activeEffectGraph.reset();
+            for (auto& [key, graph] : effectGraphs)
+            {
+                graph->effects.clear();
+                if (!graph->commandBuffers.empty())
+                {
+                    pLogicalDevice->vkd.FreeCommandBuffers(pLogicalDevice->device,
+                                                           pLogicalDevice->commandPool,
+                                                           graph->commandBuffers.size(),
+                                                           graph->commandBuffers.data());
+                }
+            }
+            effectGraphs.clear();
             Logger::debug("after free commandbuffer");
 
-            pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, fakeImageMemory, nullptr);
-
-            for (uint32_t i = 0; i < fakeImages.size(); i++)
+            for (const auto& images : intermediateImageSets)
             {
-                pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, fakeImages[i], nullptr);
+                for (const auto image : images)
+                    pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, image, nullptr);
             }
+            for (const auto memory : intermediateImageMemories)
+                pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, memory, nullptr);
+
+            for (const auto image : nonMutableOutputImages)
+                pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, image, nullptr);
+            if (nonMutableOutputMemory != VK_NULL_HANDLE)
+                pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, nonMutableOutputMemory, nullptr);
+
+            for (const auto image : fakeImages)
+                pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, image, nullptr);
+            if (fakeImageMemory != VK_NULL_HANDLE)
+                pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, fakeImageMemory, nullptr);
 
             for (unsigned int i = 0; i < imageCount; i++)
             {

@@ -16,6 +16,7 @@
 
 #include "logical_device.hpp"
 #include "logical_swapchain.hpp"
+#include "live_effects.hpp"
 
 #include "image_view.hpp"
 #include "sampler.hpp"
@@ -96,6 +97,178 @@ namespace vkBasalt
 
         if (pConfig->reloadIfChanged())
             Logger::info("reloaded live options from " + pConfig->configFilePath());
+    }
+
+    void ensureIntermediateImageSets(LogicalSwapchain* pLogicalSwapchain, const size_t count)
+    {
+        while (pLogicalSwapchain->intermediateImageSets.size() < count)
+        {
+            VkDeviceMemory memory = VK_NULL_HANDLE;
+            auto images = createFakeSwapchainImages(pLogicalSwapchain->pLogicalDevice,
+                                                    pLogicalSwapchain->swapchainCreateInfo,
+                                                    pLogicalSwapchain->imageCount,
+                                                    memory);
+            pLogicalSwapchain->intermediateImageSets.push_back(std::move(images));
+            pLogicalSwapchain->intermediateImageMemories.push_back(memory);
+            Logger::info("allocated a private image set for live effect chaining");
+        }
+    }
+
+    void ensureNonMutableOutputImages(LogicalSwapchain* pLogicalSwapchain)
+    {
+        if (pLogicalSwapchain->pLogicalDevice->supportsMutableFormat || !pLogicalSwapchain->nonMutableOutputImages.empty())
+            return;
+
+        pLogicalSwapchain->nonMutableOutputImages = createFakeSwapchainImages(pLogicalSwapchain->pLogicalDevice,
+                                                                              pLogicalSwapchain->swapchainCreateInfo,
+                                                                              pLogicalSwapchain->imageCount,
+                                                                              pLogicalSwapchain->nonMutableOutputMemory);
+    }
+
+    std::shared_ptr<Effect> createConfiguredEffect(LogicalSwapchain*          pLogicalSwapchain,
+                                                   const std::string&         effectName,
+                                                   const std::vector<VkImage>& inputImages,
+                                                   const std::vector<VkImage>& outputImages)
+    {
+        LogicalDevice* pLogicalDevice = pLogicalSwapchain->pLogicalDevice;
+        const VkFormat unormFormat = convertToUNORM(pLogicalSwapchain->format);
+        const VkFormat srgbFormat = convertToSRGB(pLogicalSwapchain->format);
+
+        if (effectName == "fxaa")
+            return std::make_shared<FxaaEffect>(
+                pLogicalDevice, srgbFormat, pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get());
+        if (effectName == "cas")
+            return std::make_shared<CasEffect>(
+                pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get());
+        if (effectName == "deband")
+            return std::make_shared<DebandEffect>(
+                pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get());
+        if (effectName == "smaa")
+            return std::make_shared<SmaaEffect>(
+                pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get());
+        if (effectName == "lut")
+            return std::make_shared<LutEffect>(
+                pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get());
+        if (effectName == "dls")
+            return std::make_shared<DlsEffect>(
+                pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get());
+        return std::make_shared<ReshadeEffect>(pLogicalDevice,
+                                               pLogicalSwapchain->format,
+                                               pLogicalSwapchain->imageExtent,
+                                               inputImages,
+                                               outputImages,
+                                               pConfig.get(),
+                                               effectName);
+    }
+
+    std::shared_ptr<EffectGraph> buildEffectGraph(LogicalSwapchain* pLogicalSwapchain,
+                                                  const std::vector<std::string>& effectNames)
+    {
+        const auto key = effectGraphKey(effectNames);
+        const auto cached = pLogicalSwapchain->effectGraphs.find(key);
+        if (cached != pLogicalSwapchain->effectGraphs.end())
+            return cached->second;
+
+        auto graph = std::make_shared<EffectGraph>();
+        graph->effectNames = effectNames;
+        LogicalDevice* pLogicalDevice = pLogicalSwapchain->pLogicalDevice;
+
+        if (effectNames.empty())
+        {
+            graph->effects.push_back(std::make_shared<TransferEffect>(pLogicalDevice,
+                                                                      pLogicalSwapchain->format,
+                                                                      pLogicalSwapchain->imageExtent,
+                                                                      pLogicalSwapchain->fakeImages,
+                                                                      pLogicalSwapchain->images,
+                                                                      pConfig.get()));
+        }
+        else
+        {
+            ensureIntermediateImageSets(pLogicalSwapchain, effectNames.size() - 1);
+            ensureNonMutableOutputImages(pLogicalSwapchain);
+            const auto& finalImages = pLogicalDevice->supportsMutableFormat
+                                          ? pLogicalSwapchain->images
+                                          : pLogicalSwapchain->nonMutableOutputImages;
+
+            for (size_t i = 0; i < effectNames.size(); ++i)
+            {
+                const auto& inputImages = i == 0
+                                              ? pLogicalSwapchain->fakeImages
+                                              : pLogicalSwapchain->intermediateImageSets[i - 1];
+                const auto& outputImages = i + 1 == effectNames.size()
+                                               ? finalImages
+                                               : pLogicalSwapchain->intermediateImageSets[i];
+                graph->effects.push_back(createConfiguredEffect(pLogicalSwapchain, effectNames[i], inputImages, outputImages));
+            }
+
+            if (!pLogicalDevice->supportsMutableFormat)
+            {
+                graph->effects.push_back(std::make_shared<TransferEffect>(pLogicalDevice,
+                                                                          pLogicalSwapchain->format,
+                                                                          pLogicalSwapchain->imageExtent,
+                                                                          pLogicalSwapchain->nonMutableOutputImages,
+                                                                          pLogicalSwapchain->images,
+                                                                          pConfig.get()));
+            }
+        }
+
+        const bool useDepth = !effectNames.empty() && !pLogicalDevice->depthImageViews.empty();
+        const VkImageView depthImageView = useDepth ? pLogicalDevice->depthImageViews[0] : VK_NULL_HANDLE;
+        const VkImage depthImage = useDepth ? pLogicalDevice->depthImages[0] : VK_NULL_HANDLE;
+        const VkFormat depthFormat = useDepth ? pLogicalDevice->depthFormats[0] : VK_FORMAT_UNDEFINED;
+        graph->commandBuffers = allocateCommandBuffer(pLogicalDevice, pLogicalSwapchain->imageCount);
+        writeCommandBuffers(pLogicalDevice, graph->effects, depthImage, depthImageView, depthFormat, graph->commandBuffers);
+        pLogicalSwapchain->effectGraphs.emplace(key, graph);
+        Logger::info("prepared effect graph: " + (key.empty() ? std::string("off") : key));
+        return graph;
+    }
+
+    void updateLiveEffectGraph(LogicalSwapchain* pLogicalSwapchain)
+    {
+        if (pLogicalSwapchain->effectSelectionRevision == pConfig->revision())
+            return;
+        pLogicalSwapchain->effectSelectionRevision = pConfig->revision();
+
+        const auto requested = pConfig->getOption<std::vector<std::string>>("effects", {"cas"});
+        if (pLogicalSwapchain->activeEffectGraph == nullptr
+            || effectGraphKey(requested) == effectGraphKey(pLogicalSwapchain->activeEffectGraph->effectNames))
+            return;
+
+        if (!canChangeEffectSelectionLive(pLogicalSwapchain->activeEffectGraph->effectNames, requested))
+        {
+            Logger::info("effect graph change requires a restart because custom effects changed");
+            return;
+        }
+
+        pLogicalSwapchain->activeEffectGraph = buildEffectGraph(pLogicalSwapchain, requested);
+        const auto key = effectGraphKey(requested);
+        Logger::info("activated live effect graph: " + (key.empty() ? std::string("off") : key));
+    }
+
+    void rerecordEffectGraphs(LogicalSwapchain* pLogicalSwapchain,
+                              const VkImage depthImage,
+                              const VkImageView depthImageView,
+                              const VkFormat depthFormat)
+    {
+        LogicalDevice* pLogicalDevice = pLogicalSwapchain->pLogicalDevice;
+        for (auto& [key, graph] : pLogicalSwapchain->effectGraphs)
+        {
+            if (!graph->commandBuffers.empty())
+            {
+                pLogicalDevice->vkd.FreeCommandBuffers(pLogicalDevice->device,
+                                                       pLogicalDevice->commandPool,
+                                                       graph->commandBuffers.size(),
+                                                       graph->commandBuffers.data());
+            }
+            graph->commandBuffers = allocateCommandBuffer(pLogicalDevice, pLogicalSwapchain->imageCount);
+            const bool useDepth = !graph->effectNames.empty() && depthImageView != VK_NULL_HANDLE;
+            writeCommandBuffers(pLogicalDevice,
+                                graph->effects,
+                                useDepth ? depthImage : VK_NULL_HANDLE,
+                                useDepth ? depthImageView : VK_NULL_HANDLE,
+                                useDepth ? depthFormat : VK_FORMAT_UNDEFINED,
+                                graph->commandBuffers);
+        }
     }
 
     VkResult VKAPI_CALL vkBasalt_CreateInstance(const VkInstanceCreateInfo*  pCreateInfo,
@@ -421,144 +594,19 @@ namespace vkBasalt
         pLogicalSwapchain->images.resize(pLogicalSwapchain->imageCount);
         pLogicalDevice->vkd.GetSwapchainImagesKHR(device, swapchain, &pLogicalSwapchain->imageCount, pLogicalSwapchain->images.data());
 
-        std::vector<std::string> effectStrings = pConfig->getOption<std::vector<std::string>>("effects", {"cas"});
+        pLogicalSwapchain->fakeImages = createFakeSwapchainImages(pLogicalDevice,
+                                                                  pLogicalSwapchain->swapchainCreateInfo,
+                                                                  pLogicalSwapchain->imageCount,
+                                                                  pLogicalSwapchain->fakeImageMemory);
+        Logger::debug("created application-facing fake swapchain images");
 
-        // create 1 more set of images when we can't use the swapchain it self
-        uint32_t fakeImageCount = pLogicalSwapchain->imageCount * (effectStrings.size() + !pLogicalDevice->supportsMutableFormat);
-
-        pLogicalSwapchain->fakeImages =
-            createFakeSwapchainImages(pLogicalDevice, pLogicalSwapchain->swapchainCreateInfo, fakeImageCount, pLogicalSwapchain->fakeImageMemory);
-        Logger::debug("created fake swapchain images");
-
-        VkFormat unormFormat = convertToUNORM(pLogicalSwapchain->format);
-        VkFormat srgbFormat  = convertToSRGB(pLogicalSwapchain->format);
-
-        for (uint32_t i = 0; i < effectStrings.size(); i++)
-        {
-            Logger::debug("current effectString " + effectStrings[i]);
-            std::vector<VkImage> firstImages(pLogicalSwapchain->fakeImages.begin() + pLogicalSwapchain->imageCount * i,
-                                             pLogicalSwapchain->fakeImages.begin() + pLogicalSwapchain->imageCount * (i + 1));
-            Logger::debug(std::to_string(firstImages.size()) + " images in firstImages");
-            std::vector<VkImage> secondImages;
-            if (i == effectStrings.size() - 1)
-            {
-                secondImages = pLogicalDevice->supportsMutableFormat
-                                   ? pLogicalSwapchain->images
-                                   : std::vector<VkImage>(pLogicalSwapchain->fakeImages.end() - pLogicalSwapchain->imageCount,
-                                                          pLogicalSwapchain->fakeImages.end());
-                Logger::debug("using swapchain images as second images");
-            }
-            else
-            {
-                secondImages = std::vector<VkImage>(pLogicalSwapchain->fakeImages.begin() + pLogicalSwapchain->imageCount * (i + 1),
-                                                    pLogicalSwapchain->fakeImages.begin() + pLogicalSwapchain->imageCount * (i + 2));
-                Logger::debug("not using swapchain images as second images");
-            }
-            Logger::debug(std::to_string(secondImages.size()) + " images in secondImages");
-            if (effectStrings[i] == std::string("fxaa"))
-            {
-                pLogicalSwapchain->effects.push_back(std::shared_ptr<Effect>(
-                    new FxaaEffect(pLogicalDevice, srgbFormat, pLogicalSwapchain->imageExtent, firstImages, secondImages, pConfig.get())));
-                Logger::debug("created FxaaEffect");
-            }
-            else if (effectStrings[i] == std::string("cas"))
-            {
-                pLogicalSwapchain->effects.push_back(std::shared_ptr<Effect>(
-                    new CasEffect(pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, firstImages, secondImages, pConfig.get())));
-                Logger::debug("created CasEffect");
-            }
-            else if (effectStrings[i] == std::string("deband"))
-            {
-                pLogicalSwapchain->effects.push_back(std::shared_ptr<Effect>(
-                    new DebandEffect(pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, firstImages, secondImages, pConfig.get())));
-                Logger::debug("created DebandEffect");
-            }
-            else if (effectStrings[i] == std::string("smaa"))
-            {
-                pLogicalSwapchain->effects.push_back(std::shared_ptr<Effect>(
-                    new SmaaEffect(pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, firstImages, secondImages, pConfig.get())));
-                Logger::debug("created SmaaEffect");
-            }
-            else if (effectStrings[i] == std::string("lut"))
-            {
-                pLogicalSwapchain->effects.push_back(std::shared_ptr<Effect>(
-                    new LutEffect(pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, firstImages, secondImages, pConfig.get())));
-                Logger::debug("created LutEffect");
-            }
-            else if (effectStrings[i] == std::string("dls"))
-            {
-                pLogicalSwapchain->effects.push_back(std::shared_ptr<Effect>(
-                    new DlsEffect(pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, firstImages, secondImages, pConfig.get())));
-                Logger::debug("created DlsEffect");
-            }
-            else
-            {
-                pLogicalSwapchain->effects.push_back(std::shared_ptr<Effect>(new ReshadeEffect(pLogicalDevice,
-                                                                                               pLogicalSwapchain->format,
-                                                                                               pLogicalSwapchain->imageExtent,
-                                                                                               firstImages,
-                                                                                               secondImages,
-                                                                                               pConfig.get(),
-                                                                                               effectStrings[i])));
-                Logger::debug("created ReshadeEffect");
-            }
-        }
-
-        if (!pLogicalDevice->supportsMutableFormat)
-        {
-            pLogicalSwapchain->effects.push_back(std::shared_ptr<Effect>(new TransferEffect(
-                pLogicalDevice,
-                pLogicalSwapchain->format,
-                pLogicalSwapchain->imageExtent,
-                std::vector<VkImage>(pLogicalSwapchain->fakeImages.end() - pLogicalSwapchain->imageCount, pLogicalSwapchain->fakeImages.end()),
-                pLogicalSwapchain->images,
-                pConfig.get())));
-        }
-
-        VkImageView depthImageView = pLogicalDevice->depthImageViews.size() ? pLogicalDevice->depthImageViews[0] : VK_NULL_HANDLE;
-        VkImage     depthImage     = pLogicalDevice->depthImageViews.size() ? pLogicalDevice->depthImages[0] : VK_NULL_HANDLE;
-        VkFormat    depthFormat    = pLogicalDevice->depthImageViews.size() ? pLogicalDevice->depthFormats[0] : VK_FORMAT_UNDEFINED;
-
-        Logger::debug("effect string count: " + std::to_string(effectStrings.size()));
-        Logger::debug("effect count: " + std::to_string(pLogicalSwapchain->effects.size()));
-
-        pLogicalSwapchain->commandBuffersEffect = allocateCommandBuffer(pLogicalDevice, pLogicalSwapchain->imageCount);
-        Logger::debug("allocated ComandBuffers " + std::to_string(pLogicalSwapchain->commandBuffersEffect.size()) + " for swapchain "
-                      + convertToString(swapchain));
-
-        writeCommandBuffers(
-            pLogicalDevice, pLogicalSwapchain->effects, depthImage, depthImageView, depthFormat, pLogicalSwapchain->commandBuffersEffect);
-        Logger::debug("wrote CommandBuffers");
-
+        const auto effectStrings = pConfig->getOption<std::vector<std::string>>("effects", {"cas"});
+        pLogicalSwapchain->activeEffectGraph = buildEffectGraph(pLogicalSwapchain, effectStrings);
+        buildEffectGraph(pLogicalSwapchain, {});
+        pLogicalSwapchain->effectSelectionRevision = pConfig->revision();
         pLogicalSwapchain->semaphores = createSemaphores(pLogicalDevice, pLogicalSwapchain->imageCount);
         Logger::debug("created semaphores");
-        for (unsigned int i = 0; i < pLogicalSwapchain->imageCount; i++)
-        {
-            Logger::debug(std::to_string(i) + " written commandbuffer " + convertToString(pLogicalSwapchain->commandBuffersEffect[i]));
-        }
         Logger::trace("vkGetSwapchainImagesKHR");
-
-        pLogicalSwapchain->defaultTransfer = std::shared_ptr<Effect>(new TransferEffect(
-            pLogicalDevice,
-            pLogicalSwapchain->format,
-            pLogicalSwapchain->imageExtent,
-            std::vector<VkImage>(pLogicalSwapchain->fakeImages.begin(), pLogicalSwapchain->fakeImages.begin() + pLogicalSwapchain->imageCount),
-            pLogicalSwapchain->images,
-            pConfig.get()));
-
-        pLogicalSwapchain->commandBuffersNoEffect = allocateCommandBuffer(pLogicalDevice, pLogicalSwapchain->imageCount);
-
-        writeCommandBuffers(pLogicalDevice,
-                            {pLogicalSwapchain->defaultTransfer},
-                            VK_NULL_HANDLE,
-                            VK_NULL_HANDLE,
-                            VK_FORMAT_UNDEFINED,
-                            pLogicalSwapchain->commandBuffersNoEffect);
-
-        for (unsigned int i = 0; i < pLogicalSwapchain->imageCount; i++)
-        {
-            Logger::debug(std::to_string(i) + " written commandbuffer " + convertToString(pLogicalSwapchain->commandBuffersNoEffect[i]));
-        }
 
         *pCount = std::min<uint32_t>(*pCount, pLogicalSwapchain->imageCount);
         std::memcpy(pSwapchainImages, pLogicalSwapchain->fakeImages.data(), sizeof(VkImage) * (*pCount));
@@ -602,7 +650,8 @@ namespace vkBasalt
             VkSwapchainKHR    swapchain         = (*pPresentInfo).pSwapchains[i];
             LogicalSwapchain* pLogicalSwapchain = swapchainMap[swapchain].get();
 
-            for (auto& effect : pLogicalSwapchain->effects)
+            updateLiveEffectGraph(pLogicalSwapchain);
+            for (auto& effect : pLogicalSwapchain->activeEffectGraph->effects)
             {
                 effect->updateEffect(index);
             }
@@ -614,8 +663,10 @@ namespace vkBasalt
             submitInfo.pWaitSemaphores    = i == 0 ? pPresentInfo->pWaitSemaphores : nullptr;
             submitInfo.pWaitDstStageMask  = i == 0 ? waitStages.data() : nullptr;
             submitInfo.commandBufferCount = 1;
-            submitInfo.pCommandBuffers =
-                presentEffect ? &(pLogicalSwapchain->commandBuffersEffect[index]) : &(pLogicalSwapchain->commandBuffersNoEffect[index]);
+            const auto& selectedGraph = presentEffect
+                                            ? pLogicalSwapchain->activeEffectGraph
+                                            : pLogicalSwapchain->effectGraphs.at("");
+            submitInfo.pCommandBuffers = &(selectedGraph->commandBuffers[index]);
             submitInfo.signalSemaphoreCount = 1;
             submitInfo.pSignalSemaphores    = &(pLogicalSwapchain->semaphores[index]);
 
@@ -713,19 +764,10 @@ namespace vkBasalt
                 LogicalSwapchain* pLogicalSwapchain = it.second.get();
                 if (pLogicalSwapchain->pLogicalDevice == pLogicalDevice)
                 {
-                    if (pLogicalSwapchain->commandBuffersEffect.size())
+                    if (!pLogicalSwapchain->effectGraphs.empty())
                     {
-                        pLogicalDevice->vkd.FreeCommandBuffers(pLogicalDevice->device,
-                                                               pLogicalDevice->commandPool,
-                                                               pLogicalSwapchain->commandBuffersEffect.size(),
-                                                               pLogicalSwapchain->commandBuffersEffect.data());
-                        pLogicalSwapchain->commandBuffersEffect.clear();
-                        pLogicalSwapchain->commandBuffersEffect = allocateCommandBuffer(pLogicalDevice, pLogicalSwapchain->imageCount);
-                        Logger::debug("allocated CommandBuffers for swapchain " + convertToString(it.first));
-
-                        writeCommandBuffers(
-                            pLogicalDevice, pLogicalSwapchain->effects, image, depthImageView, depthFormat, pLogicalSwapchain->commandBuffersEffect);
-                        Logger::debug("wrote CommandBuffers");
+                        rerecordEffectGraphs(pLogicalSwapchain, image, depthImageView, depthFormat);
+                        Logger::debug("rewrote effect graph command buffers for swapchain " + convertToString(it.first));
                     }
                 }
             }
@@ -763,23 +805,10 @@ namespace vkBasalt
                     LogicalSwapchain* pLogicalSwapchain = it.second.get();
                     if (pLogicalSwapchain->pLogicalDevice == pLogicalDevice)
                     {
-                        if (pLogicalSwapchain->commandBuffersEffect.size())
+                        if (!pLogicalSwapchain->effectGraphs.empty())
                         {
-                            pLogicalDevice->vkd.FreeCommandBuffers(pLogicalDevice->device,
-                                                                   pLogicalDevice->commandPool,
-                                                                   pLogicalSwapchain->commandBuffersEffect.size(),
-                                                                   pLogicalSwapchain->commandBuffersEffect.data());
-                            pLogicalSwapchain->commandBuffersEffect.clear();
-                            pLogicalSwapchain->commandBuffersEffect = allocateCommandBuffer(pLogicalDevice, pLogicalSwapchain->imageCount);
-                            Logger::debug("allocated CommandBuffers for swapchain " + convertToString(it.first));
-
-                            writeCommandBuffers(pLogicalDevice,
-                                                pLogicalSwapchain->effects,
-                                                depthImage,
-                                                depthImageView,
-                                                depthFormat,
-                                                pLogicalSwapchain->commandBuffersEffect);
-                            Logger::debug("wrote CommandBuffers");
+                            rerecordEffectGraphs(pLogicalSwapchain, depthImage, depthImageView, depthFormat);
+                            Logger::debug("rewrote effect graph command buffers for swapchain " + convertToString(it.first));
                         }
                     }
                 }

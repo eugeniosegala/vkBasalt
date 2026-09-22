@@ -7,3 +7,11 @@ config_reload_test = executable(
 )
 
 test('config reload', config_reload_test)
+
+live_effects_test = executable(
+    'live_effects_test',
+    'live_effects_test.cpp',
+    include_directories: include_directories('../src'),
+)
+
+test('live effect selection', live_effects_test)

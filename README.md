@@ -2,7 +2,7 @@
 
 This fork publishes immutable `mako-v*` releases containing verified 64-bit and 32-bit Linux Vulkan-layer libraries for MAKO. MAKO consumes those archives by exact release tag and SHA-256 checksum and installs them only in its private user-owned directory. Upstream development remains credited to DadSchoorse and the vkBasalt contributors.
 
-MAKO launches this fork with `VKBASALT_CONFIG_RELOAD=1` and an explicit `VKBASALT_CONFIG_FILE`. The layer checks that file at a bounded interval and updates CAS/DLS strength and DLS denoise through per-swapchain-image uniform buffers. Layer activation and effect-graph changes remain restart-bound.
+MAKO launches this fork with `VKBASALT_CONFIG_RELOAD=1` and an explicit `VKBASALT_CONFIG_FILE`. The layer checks that file at a bounded interval and updates CAS/DLS strength and DLS denoise through per-swapchain-image uniform buffers. It also prepares and retains replacement graphs so MAKO's FXAA, SMAA, CAS, and DLS selections can switch live without waiting for the device or destroying in-flight resources. Layer activation and custom-effect changes remain restart-bound.
 
 vkBasalt is a Vulkan post processing layer to enhance the visual graphics of games.
 

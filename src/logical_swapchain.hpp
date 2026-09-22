@@ -6,6 +6,7 @@
 #include <iostream>
 #include <vector>
 #include <memory>
+#include <map>
 
 #include "effect.hpp"
 
@@ -15,6 +16,13 @@
 
 namespace vkBasalt
 {
+    struct EffectGraph
+    {
+        std::vector<std::string>            effectNames;
+        std::vector<std::shared_ptr<Effect>> effects;
+        std::vector<VkCommandBuffer>         commandBuffers;
+    };
+
     // for each swapchain, we have the Images and the other stuff we need to execute the compute shader
     struct LogicalSwapchain
     {
@@ -25,12 +33,15 @@ namespace vkBasalt
         uint32_t                             imageCount;
         std::vector<VkImage>                 images;
         std::vector<VkImage>                 fakeImages;
-        std::vector<VkCommandBuffer>         commandBuffersEffect;
-        std::vector<VkCommandBuffer>         commandBuffersNoEffect;
+        std::vector<std::vector<VkImage>>    intermediateImageSets;
+        std::vector<VkDeviceMemory>          intermediateImageMemories;
+        std::vector<VkImage>                 nonMutableOutputImages;
         std::vector<VkSemaphore>             semaphores;
-        std::vector<std::shared_ptr<Effect>> effects;
-        std::shared_ptr<Effect>              defaultTransfer;
-        VkDeviceMemory                       fakeImageMemory;
+        std::map<std::string, std::shared_ptr<EffectGraph>> effectGraphs;
+        std::shared_ptr<EffectGraph>          activeEffectGraph;
+        VkDeviceMemory                       fakeImageMemory = VK_NULL_HANDLE;
+        VkDeviceMemory                       nonMutableOutputMemory = VK_NULL_HANDLE;
+        uint64_t                             effectSelectionRevision = 0;
 
         void destroy();
     };
