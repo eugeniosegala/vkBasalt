@@ -22,6 +22,22 @@ int main()
     assert(vkBasalt::validMakoEffectSelection(Effects{"fxaa", "makoSepia", "cas"}));
     assert(vkBasalt::validMakoEffectSelection(Effects{"makoMonochrome", "dls"}));
     assert(vkBasalt::validMakoEffectSelection(Effects{"smaa", "makoVignette"}));
+    for (const auto& effect : Effects{
+             "makoHDRLook",
+             "makoColourfulness",
+             "makoTechnicolor2",
+             "makoDPX",
+             "makoBleachBypass",
+             "makoNoir",
+             "makoFilmGrain",
+             "makoCartoon",
+             "makoNostalgia",
+             "makoChromaticAberration",
+         })
+    {
+        assert(vkBasalt::validMakoEffectSelection(Effects{effect}));
+        assert(vkBasalt::isMakoControlledEffect(effect));
+    }
     assert(!vkBasalt::validMakoEffectSelection(Effects{"cas", "fxaa"}));
     assert(!vkBasalt::validMakoEffectSelection(Effects{"fxaa", "smaa"}));
     assert(!vkBasalt::validMakoEffectSelection(Effects{"cas", "dls"}));
@@ -36,6 +52,10 @@ int main()
     assert(vkBasalt::canChangeEffectSelectionLive(Effects{"makoTechnicolor"}, Effects{"makoSepia"}));
     assert(vkBasalt::canChangeEffectSelectionLive(Effects{"makoSepia"}, Effects{"makoMonochrome"}));
     assert(vkBasalt::canChangeEffectSelectionLive(Effects{"makoMonochrome"}, Effects{"makoVignette"}));
+    assert(vkBasalt::canChangeEffectSelectionLive(Effects{"makoVignette"}, Effects{"makoHDRLook"}));
+    assert(vkBasalt::canChangeEffectSelectionLive(Effects{"makoHDRLook"}, Effects{"makoColourfulness"}));
+    assert(vkBasalt::canChangeEffectSelectionLive(Effects{"makoColourfulness"}, Effects{"makoNoir"}));
+    assert(vkBasalt::canChangeEffectSelectionLive(Effects{"makoNoir"}, Effects{"makoChromaticAberration"}));
     assert(vkBasalt::canChangeEffectSelectionLive(Effects{"Custom@Tone", "cas"}, Effects{"Custom@Tone", "fxaa", "dls"}));
     assert(!vkBasalt::canChangeEffectSelectionLive(Effects{"Custom@Tone", "cas"}, Effects{"Other@Tone", "fxaa", "dls"}));
     assert(!vkBasalt::canChangeEffectSelectionLive(Effects{"cas"}, Effects{"cas", "fxaa"}));

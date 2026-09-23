@@ -6,12 +6,22 @@
 
 namespace vkBasalt
 {
+    inline bool isMakoShaderEffect(const std::string& effect)
+    {
+        return effect == "makoVibrance" || effect == "makoCurves" || effect == "makoDeband"
+               || effect == "makoTechnicolor" || effect == "makoSepia"
+               || effect == "makoMonochrome" || effect == "makoVignette"
+               || effect == "makoHDRLook" || effect == "makoColourfulness"
+               || effect == "makoTechnicolor2" || effect == "makoDPX"
+               || effect == "makoBleachBypass" || effect == "makoNoir"
+               || effect == "makoFilmGrain" || effect == "makoCartoon"
+               || effect == "makoNostalgia" || effect == "makoChromaticAberration";
+    }
+
     inline bool isMakoControlledEffect(const std::string& effect)
     {
         return effect == "fxaa" || effect == "smaa" || effect == "cas" || effect == "dls"
-               || effect == "makoVibrance" || effect == "makoCurves" || effect == "makoDeband"
-               || effect == "makoTechnicolor" || effect == "makoSepia"
-               || effect == "makoMonochrome" || effect == "makoVignette";
+               || isMakoShaderEffect(effect);
     }
 
     inline std::vector<std::string> makoControlledEffects(const std::vector<std::string>& effects)
@@ -44,9 +54,7 @@ namespace vkBasalt
             int category = -1;
             if (effect == "fxaa" || effect == "smaa")
                 category = 0;
-            else if (effect == "makoVibrance" || effect == "makoCurves" || effect == "makoDeband"
-                     || effect == "makoTechnicolor" || effect == "makoSepia"
-                     || effect == "makoMonochrome" || effect == "makoVignette")
+            else if (isMakoShaderEffect(effect))
                 category = 1;
             else if (effect == "cas" || effect == "dls")
                 category = 2;
