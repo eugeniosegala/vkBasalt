@@ -33,6 +33,8 @@ int main()
              "makoCartoon",
              "makoNostalgia",
              "makoChromaticAberration",
+             "makoClarity",
+             "makoLevelsPlus",
          })
     {
         assert(vkBasalt::validMakoEffectSelection(Effects{effect}));
@@ -41,7 +43,9 @@ int main()
     assert(!vkBasalt::validMakoEffectSelection(Effects{"cas", "fxaa"}));
     assert(!vkBasalt::validMakoEffectSelection(Effects{"fxaa", "smaa"}));
     assert(!vkBasalt::validMakoEffectSelection(Effects{"cas", "dls"}));
-    assert(!vkBasalt::validMakoEffectSelection(Effects{"makoCurves", "makoVibrance"}));
+    assert(vkBasalt::validMakoEffectSelection(Effects{"makoCurves", "makoVibrance"}));
+    assert(vkBasalt::validMakoEffectSelection(Effects{"fxaa", "makoHDRLook", "makoClarity", "makoVibrance", "makoLevelsPlus", "cas"}));
+    assert(!vkBasalt::validMakoEffectSelection(Effects{"makoClarity", "makoClarity"}));
     assert(!vkBasalt::validMakoEffectSelection(Effects{"cas", "makoDeband"}));
 
     assert(vkBasalt::canChangeEffectSelectionLive(Effects{"cas"}, Effects{"smaa", "dls"}));
@@ -56,6 +60,7 @@ int main()
     assert(vkBasalt::canChangeEffectSelectionLive(Effects{"makoHDRLook"}, Effects{"makoColourfulness"}));
     assert(vkBasalt::canChangeEffectSelectionLive(Effects{"makoColourfulness"}, Effects{"makoNoir"}));
     assert(vkBasalt::canChangeEffectSelectionLive(Effects{"makoNoir"}, Effects{"makoChromaticAberration"}));
+    assert(vkBasalt::canChangeEffectSelectionLive(Effects{"makoVibrance", "cas"}, Effects{"makoHDRLook", "makoClarity", "makoVibrance", "makoLevelsPlus", "cas"}));
     assert(vkBasalt::canChangeEffectSelectionLive(Effects{"Custom@Tone", "cas"}, Effects{"Custom@Tone", "fxaa", "dls"}));
     assert(!vkBasalt::canChangeEffectSelectionLive(Effects{"Custom@Tone", "cas"}, Effects{"Other@Tone", "fxaa", "dls"}));
     assert(!vkBasalt::canChangeEffectSelectionLive(Effects{"cas"}, Effects{"cas", "fxaa"}));

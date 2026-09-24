@@ -1,6 +1,7 @@
 #ifndef LIVE_EFFECTS_HPP_INCLUDED
 #define LIVE_EFFECTS_HPP_INCLUDED
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -15,7 +16,8 @@ namespace vkBasalt
                || effect == "makoTechnicolor2" || effect == "makoDPX"
                || effect == "makoBleachBypass" || effect == "makoNoir"
                || effect == "makoFilmGrain" || effect == "makoCartoon"
-               || effect == "makoNostalgia" || effect == "makoChromaticAberration";
+               || effect == "makoNostalgia" || effect == "makoChromaticAberration"
+               || effect == "makoClarity" || effect == "makoLevelsPlus";
     }
 
     inline bool isMakoControlledEffect(const std::string& effect)
@@ -49,6 +51,7 @@ namespace vkBasalt
     inline bool validMakoEffectSelection(const std::vector<std::string>& effects)
     {
         int lastCategory = -1;
+        std::vector<std::string> seenShaders;
         for (const auto& effect : effects)
         {
             int category = -1;
@@ -61,8 +64,14 @@ namespace vkBasalt
             else
                 continue;
 
-            if (category <= lastCategory)
+            if (category < lastCategory || (category == lastCategory && category != 1))
                 return false;
+            if (category == 1)
+            {
+                if (std::find(seenShaders.begin(), seenShaders.end(), effect) != seenShaders.end())
+                    return false;
+                seenShaders.push_back(effect);
+            }
             lastCategory = category;
         }
         return true;
