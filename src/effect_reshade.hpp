@@ -82,9 +82,9 @@ namespace vkBasalt
 
         VkFormat    inputOutputFormatUNORM;
         VkFormat    inputOutputFormatSRGB;
-        VkFormat    stencilFormat;
-        VkImage     stencilImage;
-        VkImageView stencilImageView;
+        VkFormat    stencilFormat = VK_FORMAT_UNDEFINED;
+        VkImage     stencilImage = VK_NULL_HANDLE;
+        VkImageView stencilImageView = VK_NULL_HANDLE;
         // how often the shader writes to the reshade back buffer
         // we need to flip the "backbuffer" after each write if there is a next one
         int                      outputWrites = 0;

@@ -71,19 +71,26 @@ namespace vkBasalt
                          stagingBufferMemory);
         }
 
-        stencilFormat = getStencilFormat(pLogicalDevice);
-        Logger::debug("Stencil Format: " + std::to_string(stencilFormat));
-        textureMemory.push_back(VK_NULL_HANDLE);
-        stencilImage = createImages(pLogicalDevice,
-                                    1,
-                                    {imageExtent.width, imageExtent.height, 1},
-                                    stencilFormat,
-                                    VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-                                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                                    textureMemory.back())[0];
+        const bool usesStencil = !module.techniques.empty() && std::any_of(
+            module.techniques[0].passes.begin(), module.techniques[0].passes.end(),
+            [](const auto& pass) { return pass.stencil_enable; });
+        if (usesStencil)
+        {
+            stencilFormat = getStencilFormat(pLogicalDevice);
+            Logger::debug("Stencil Format: " + std::to_string(stencilFormat));
+            textureMemory.push_back(VK_NULL_HANDLE);
+            stencilImage = createImages(pLogicalDevice,
+                                        1,
+                                        {imageExtent.width, imageExtent.height, 1},
+                                        stencilFormat,
+                                        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                        textureMemory.back())[0];
 
-        stencilImageView = createImageViews(
-            pLogicalDevice, stencilFormat, {stencilImage}, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)[0];
+            stencilImageView = createImageViews(
+                pLogicalDevice, stencilFormat, {stencilImage}, VK_IMAGE_VIEW_TYPE_2D,
+                VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)[0];
+        }
 
         std::vector<std::vector<VkImageView>> imageViewVector;
 
@@ -458,7 +465,8 @@ namespace vkBasalt
 
             uint32_t depthAttachmentCount = 0;
 
-            if (scissor.extent.width == imageExtent.width && scissor.extent.height == imageExtent.height)
+            if (pass.stencil_enable && scissor.extent.width == imageExtent.width &&
+                scissor.extent.height == imageExtent.height)
             {
                 depthAttachmentCount = 1;
 
@@ -543,11 +551,12 @@ namespace vkBasalt
             {
                 std::vector<VkImageView> backBufferImageViews = pass.srgb_write_enable ? backBufferImageViewsSRGB : backBufferImageViewsUNORM;
                 std::vector<VkImageView> outputImageViews     = pass.srgb_write_enable ? outputImageViewsSRGB : outputImageViewsUNORM;
+                std::vector<std::vector<VkImageView>> framebufferAttachments{
+                    outputToBackBuffer ? backBufferImageViews : outputImageViews};
+                if (depthAttachmentCount)
+                    framebufferAttachments.emplace_back(inputImages.size(), stencilImageView);
                 framebuffers.push_back(createFramebuffers(
-                    pLogicalDevice,
-                    renderPass,
-                    imageExtent,
-                    {outputToBackBuffer ? backBufferImageViews : outputImageViews, std::vector<VkImageView>(inputImages.size(), stencilImageView)}));
+                    pLogicalDevice, renderPass, imageExtent, framebufferAttachments));
                 outputToBackBuffer = !outputToBackBuffer;
                 switchSamplers.push_back(true);
             }
@@ -905,24 +914,26 @@ namespace vkBasalt
                                                    &memoryBarrier);
         }
 
-        // stencil image
-        memoryBarrier.image                       = stencilImage;
-        memoryBarrier.srcAccessMask               = 0;
-        memoryBarrier.dstAccessMask               = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        memoryBarrier.oldLayout                   = VK_IMAGE_LAYOUT_UNDEFINED;
-        memoryBarrier.newLayout                   = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        memoryBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT | VK_IMAGE_ASPECT_DEPTH_BIT;
+        if (stencilImage != VK_NULL_HANDLE)
+        {
+            memoryBarrier.image                       = stencilImage;
+            memoryBarrier.srcAccessMask               = 0;
+            memoryBarrier.dstAccessMask               = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            memoryBarrier.oldLayout                   = VK_IMAGE_LAYOUT_UNDEFINED;
+            memoryBarrier.newLayout                   = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            memoryBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT | VK_IMAGE_ASPECT_DEPTH_BIT;
 
-        pLogicalDevice->vkd.CmdPipelineBarrier(commandBuffer,
-                                               VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                                               VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-                                               0,
-                                               0,
-                                               nullptr,
-                                               0,
-                                               nullptr,
-                                               1,
-                                               &memoryBarrier);
+            pLogicalDevice->vkd.CmdPipelineBarrier(commandBuffer,
+                                                   VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                                                   VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                                                   0,
+                                                   0,
+                                                   nullptr,
+                                                   0,
+                                                   nullptr,
+                                                   1,
+                                                   &memoryBarrier);
+        }
 
         Logger::debug("after the first pipeline barrier");
 
@@ -1088,7 +1099,8 @@ namespace vkBasalt
         {
             pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, imageView, nullptr);
         }
-        pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, stencilImageView, nullptr);
+        if (stencilImageView != VK_NULL_HANDLE)
+            pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, stencilImageView, nullptr);
 
         for (auto& it : textureImages)
         {
@@ -1103,7 +1115,8 @@ namespace vkBasalt
             pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, image, nullptr);
         }
 
-        pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, stencilImage, nullptr);
+        if (stencilImage != VK_NULL_HANDLE)
+            pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, stencilImage, nullptr);
 
         for (auto& sampler : samplers)
         {
