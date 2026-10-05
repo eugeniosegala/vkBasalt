@@ -6,6 +6,8 @@ MAKO launches this fork with `VKBASALT_CONFIG_RELOAD=1` and an explicit `VKBASAL
 
 The ReShade path allocates a stencil attachment only when a selected pass enables stencil. Effects that do not use it avoid that allocation; effects that require stencil retain the existing path. This is an allocation optimization, not a promise that every ReShade shader or depth-based effect works.
 
+MAKO's Frame Generation layer sits above vkBasalt, so every generated and real output passes through this layer's present hook. The toggle key is therefore read at most once every 50 ms rather than through a display-server round trip on every present, and each ReShade effect keeps its uniform buffer mapped for its lifetime instead of mapping and unmapping it on every present. Effects still run on every output, so their GPU cost scales with the Frame Generation multiplier.
+
 vkBasalt is a Vulkan post processing layer to enhance the visual graphics of games.
 
 The built-in effects are:

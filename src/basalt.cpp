@@ -17,6 +17,7 @@
 #include "logical_device.hpp"
 #include "logical_swapchain.hpp"
 #include "live_effects.hpp"
+#include "toggle_key_poll.hpp"
 
 #include "image_view.hpp"
 #include "sampler.hpp"
@@ -652,20 +653,24 @@ namespace vkBasalt
 
         static uint32_t keySymbol = convertToKeySym(pConfig->getOption<std::string>("toggleKey", "Home"));
 
-        static bool pressed       = false;
-        static bool presentEffect = pConfig->getOption<bool>("enableOnLaunch", true);
+        static bool          pressed       = false;
+        static bool          presentEffect = pConfig->getOption<bool>("enableOnLaunch", true);
+        static ToggleKeyPoll keyPoll;
 
-        if (isKeyPressed(keySymbol))
+        if (keyPoll.due(std::chrono::steady_clock::now()))
         {
-            if (!pressed)
+            if (isKeyPressed(keySymbol))
             {
-                presentEffect = !presentEffect;
-                pressed       = true;
+                if (!pressed)
+                {
+                    presentEffect = !presentEffect;
+                    pressed       = true;
+                }
             }
-        }
-        else
-        {
-            pressed = false;
+            else
+            {
+                pressed = false;
+            }
         }
 
         LogicalDevice* pLogicalDevice = deviceMap[GetKey(queue)].get();

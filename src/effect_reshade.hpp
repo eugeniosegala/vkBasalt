@@ -93,6 +93,7 @@ namespace vkBasalt
         std::vector<VkImageView> backBufferImageViewsSRGB;
         VkBuffer                 stagingBuffer;
         VkDeviceMemory           stagingBufferMemory;
+        void*                    stagingBufferMapping = nullptr;
         uint32_t                 bufferSize;
         VkDescriptorSet          bufferDescriptorSet;
 

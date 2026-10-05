@@ -69,6 +69,11 @@ namespace vkBasalt
                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                          stagingBuffer,
                          stagingBufferMemory);
+            // Map once for the effect's lifetime. Uniforms update on every
+            // present, and a map/unmap pair per present can reach the kernel.
+            VkResult result =
+                pLogicalDevice->vkd.MapMemory(pLogicalDevice->device, stagingBufferMemory, 0, bufferSize, 0, &stagingBufferMapping);
+            ASSERT_VULKAN(result);
         }
 
         const bool usesStencil = !module.techniques.empty() && std::any_of(
@@ -783,16 +788,12 @@ namespace vkBasalt
 
     void ReshadeEffect::updateEffect(uint32_t imageIndex)
     {
-        if (bufferSize)
+        if (stagingBufferMapping)
         {
-            void*    data;
-            VkResult result = pLogicalDevice->vkd.MapMemory(pLogicalDevice->device, stagingBufferMemory, 0, bufferSize, 0, &data);
-            ASSERT_VULKAN(result);
             for (auto& uniform : uniforms)
             {
-                uniform->update(data);
+                uniform->update(stagingBufferMapping);
             }
-            pLogicalDevice->vkd.UnmapMemory(pLogicalDevice->device, stagingBufferMemory);
         }
     }
 
@@ -1021,6 +1022,8 @@ namespace vkBasalt
 
         if (bufferSize)
         {
+            if (stagingBufferMapping)
+                pLogicalDevice->vkd.UnmapMemory(pLogicalDevice->device, stagingBufferMemory);
             pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, stagingBufferMemory, nullptr);
             pLogicalDevice->vkd.DestroyBuffer(pLogicalDevice->device, stagingBuffer, nullptr);
         }
