@@ -77,6 +77,47 @@ namespace vkBasalt
         return true;
     }
 
+    // Custom activation/order stays restart-bound. Project bundled edits onto
+    // the running custom chain so a pending custom edit cannot freeze them.
+    inline std::vector<std::string> liveEffectSelection(const std::vector<std::string>& active,
+                                                         const std::vector<std::string>& requested)
+    {
+        if (customEffects(active) == customEffects(requested))
+            return requested;
+
+        auto live = makoControlledEffects(requested);
+        size_t insertionFloor = 0;
+        for (size_t i = 0; i < active.size(); ++i)
+        {
+            if (isMakoControlledEffect(active[i]))
+                continue;
+
+            size_t position = live.size();
+            // Keep a custom effect before its next surviving bundled neighbour.
+            for (size_t next = i + 1; next < active.size(); ++next)
+            {
+                if (!isMakoControlledEffect(active[next]))
+                    continue;
+                const auto anchor = std::find(live.begin() + insertionFloor, live.end(), active[next]);
+                if (anchor != live.end())
+                {
+                    position = static_cast<size_t>(anchor - live.begin());
+                    break;
+                }
+            }
+            if (position == live.size())
+            {
+                // If its neighbours were removed, keep it before sharpening.
+                const auto sharpening = std::find_if(live.begin() + insertionFloor, live.end(),
+                    [](const std::string& effect) { return effect == "cas" || effect == "dls"; });
+                position = static_cast<size_t>(sharpening - live.begin());
+            }
+            live.insert(live.begin() + position, active[i]);
+            insertionFloor = position + 1;
+        }
+        return live;
+    }
+
     inline bool canChangeEffectSelectionLive(const std::vector<std::string>& active,
                                              const std::vector<std::string>& requested)
     {

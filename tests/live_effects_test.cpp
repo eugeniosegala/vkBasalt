@@ -65,6 +65,30 @@ int main()
     assert(!vkBasalt::canChangeEffectSelectionLive(Effects{"Custom@Tone", "cas"}, Effects{"Other@Tone", "fxaa", "dls"}));
     assert(!vkBasalt::canChangeEffectSelectionLive(Effects{"cas"}, Effects{"cas", "fxaa"}));
 
+    // RE4: deselecting Border then editing bundled shaders used to freeze the
+    // entire chain. Keep Border active until restart while applying each edit.
+    const Effects borderAtLaunch{"makoLevelsPlus", "makoVibrance", "CustomBorder", "cas"};
+    auto live = vkBasalt::liveEffectSelection(borderAtLaunch, Effects{"makoLevelsPlus", "cas"});
+    assert((live == Effects{"makoLevelsPlus", "CustomBorder", "cas"}));
+    assert(vkBasalt::canChangeEffectSelectionLive(borderAtLaunch, live));
+    live = vkBasalt::liveEffectSelection(live, Effects{"makoHDRLook", "cas"});
+    assert((live == Effects{"makoHDRLook", "CustomBorder", "cas"}));
+    assert((vkBasalt::liveEffectSelection(live, Effects{}) == Effects{"CustomBorder"}));
+    // Adding a custom selection during play must not block bundled additions.
+    assert((vkBasalt::liveEffectSelection(Effects{"cas"}, Effects{"CustomBorder", "makoVibrance", "cas"})
+            == Effects{"makoVibrance", "cas"}));
+    // Keep custom ordering and surviving anchors for advanced mixed chains.
+    assert((vkBasalt::liveEffectSelection(Effects{"CustomA", "makoVibrance", "CustomB", "cas"},
+                                        Effects{"smaa", "makoVibrance", "dls"})
+            == Effects{"smaa", "CustomA", "makoVibrance", "CustomB", "dls"}));
+    assert((vkBasalt::liveEffectSelection(Effects{"CustomA", "makoVibrance", "CustomB", "cas"},
+                                        Effects{"CustomB", "CustomA", "cas"})
+            == Effects{"CustomA", "CustomB", "cas"}));
+    assert((vkBasalt::liveEffectSelection(Effects{"CustomA", "cas"}, Effects{"CustomA", "makoVibrance", "dls"})
+            == Effects{"CustomA", "makoVibrance", "dls"}));
+    assert(!vkBasalt::canChangeEffectSelectionLive(Effects{"CustomA", "cas"},
+        vkBasalt::liveEffectSelection(Effects{"CustomA", "cas"}, Effects{"cas", "fxaa"})));
+
     assert(vkBasalt::effectGraphKey(Effects{}) == "");
     assert(vkBasalt::effectGraphKey(Effects{"fxaa", "cas"}) == "fxaa:cas");
     assert(vkBasalt::shouldRetainEffectGraph("", "fxaa:cas"));

@@ -153,12 +153,14 @@ namespace vkBasalt
         if (effectName == "dls")
             return std::make_shared<DlsEffect>(
                 pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get());
+        Config* effectConfig = !isMakoControlledEffect(effectName) && pLogicalSwapchain->customEffectConfig
+                                   ? pLogicalSwapchain->customEffectConfig.get() : pConfig.get();
         return std::make_shared<ReshadeEffect>(pLogicalDevice,
                                                pLogicalSwapchain->format,
                                                pLogicalSwapchain->imageExtent,
                                                inputImages,
                                                outputImages,
-                                               pConfig.get(),
+                                               effectConfig,
                                                effectName);
     }
 
@@ -231,21 +233,26 @@ namespace vkBasalt
             return;
 
         const auto requested = pConfig->getOption<std::vector<std::string>>("effects", {"cas"});
-        if (pLogicalSwapchain->activeEffectGraph == nullptr
-            || effectGraphKey(requested) == effectGraphKey(pLogicalSwapchain->activeEffectGraph->effectNames))
+        if (pLogicalSwapchain->activeEffectGraph == nullptr)
+            return;
+        const auto& active = pLogicalSwapchain->activeEffectGraph->effectNames;
+        const auto live = liveEffectSelection(active, requested);
+        if (customEffects(active) != customEffects(requested))
+            Logger::info("custom effect changes require a restart; bundled changes remain live");
+        if (effectGraphKey(live) == effectGraphKey(active))
         {
             pLogicalSwapchain->effectSelectionRevision = revision;
             return;
         }
 
-        if (!canChangeEffectSelectionLive(pLogicalSwapchain->activeEffectGraph->effectNames, requested))
+        if (!canChangeEffectSelectionLive(active, live))
         {
             pLogicalSwapchain->effectSelectionRevision = revision;
-            Logger::info("effect graph change requires a restart because custom effects changed");
+            Logger::warn("ignored invalid live bundled effect selection");
             return;
         }
 
-        const auto key = effectGraphKey(requested);
+        const auto key = effectGraphKey(live);
         LogicalDevice* pLogicalDevice = pLogicalSwapchain->pLogicalDevice;
         const VkResult idleResult = pLogicalDevice->vkd.QueueWaitIdle(pLogicalDevice->queue);
         if (idleResult != VK_SUCCESS)
@@ -271,7 +278,7 @@ namespace vkBasalt
             retiredGraphs++;
         }
 
-        pLogicalSwapchain->activeEffectGraph = buildEffectGraph(pLogicalSwapchain, requested);
+        pLogicalSwapchain->activeEffectGraph = buildEffectGraph(pLogicalSwapchain, live);
         Logger::info("activated live effect graph: " + (key.empty() ? std::string("off") : key));
         if (retiredGraphs > 0)
             Logger::info("retired " + std::to_string(retiredGraphs) + " inactive live effect graph(s)");
@@ -633,6 +640,8 @@ namespace vkBasalt
         Logger::debug("created application-facing fake swapchain images");
 
         const auto effectStrings = pConfig->getOption<std::vector<std::string>>("effects", {"cas"});
+        if (!customEffects(effectStrings).empty())
+            pLogicalSwapchain->customEffectConfig = std::make_shared<Config>(*pConfig);
         pLogicalSwapchain->activeEffectGraph = buildEffectGraph(pLogicalSwapchain, effectStrings);
         buildEffectGraph(pLogicalSwapchain, {});
         pLogicalSwapchain->effectSelectionRevision = pConfig->revision();

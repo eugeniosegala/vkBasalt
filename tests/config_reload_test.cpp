@@ -49,6 +49,15 @@ int main()
     assert(config.revision() == 1);
     assert(!config.reloadIfChanged());
 
+    writeConfigAtomically(configPath, "effects = CustomBorder:cas\nCustomBorder = \"/tmp/Border.fx\"\nreshadeIncludePath = /tmp/includes\n");
+    assert(config.reloadIfChanged());
+    vkBasalt::Config customSnapshot(config);
+    writeConfigAtomically(configPath, "effects = makoVibrance:cas\n");
+    assert(config.reloadIfChanged());
+    assert(config.getOption<std::string>("CustomBorder").empty());
+    assert(customSnapshot.getOption<std::string>("CustomBorder") == "/tmp/Border.fx");
+    assert(customSnapshot.getOption<std::string>("reshadeIncludePath") == "/tmp/includes");
+
     std::filesystem::remove_all(directory);
     return 0;
 }
