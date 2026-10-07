@@ -126,6 +126,9 @@ namespace vkBasalt
                                                                             std::vector<VkSampler>                samplers,
                                                                             std::vector<std::vector<VkImageView>> imageViewsVectors)
     {
+        // Constant-colour and procedural ReShade shaders need no samplers.
+        if (imageViewsVectors.empty())
+            return {};
         std::vector<VkDescriptorSet> descriptorSets(imageViewsVectors[0].size());
 
         std::vector<VkDescriptorSetLayout> layouts(descriptorSets.size(), descriptorSetLayout);

@@ -13,6 +13,7 @@
 #include "effect.hpp"
 #include "config.hpp"
 #include "reshade_uniforms.hpp"
+#include "reshade_module.hpp"
 
 #include "logical_device.hpp"
 
@@ -31,7 +32,8 @@ namespace vkBasalt
                       std::vector<VkImage> inputImages,
                       std::vector<VkImage> outputImages,
                       Config*              pConfig,
-                      std::string          effectName);
+                      std::string          effectName,
+                      PreparedReshadeModule compiledModule);
         void virtual applyEffect(uint32_t imageIndex, VkCommandBuffer commandBuffer) override;
         void virtual updateEffect(uint32_t imageIndex) override;
         void virtual useDepthImage(VkImageView depthImageView) override;
@@ -99,7 +101,6 @@ namespace vkBasalt
 
         std::vector<std::shared_ptr<ReshadeUniform>> uniforms;
 
-        void          createReshadeModule();
         VkFormat      convertReshadeFormat(reshadefx::texture_format texFormat);
         VkCompareOp   convertReshadeCompareOp(reshadefx::pass_stencil_func compareOp);
         VkStencilOp   convertReshadeStencilOp(reshadefx::pass_stencil_op stencilOp);

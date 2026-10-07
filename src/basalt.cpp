@@ -41,6 +41,7 @@
 #include "effect_deband.hpp"
 #include "effect_lut.hpp"
 #include "effect_reshade.hpp"
+#include "reshade_module.hpp"
 #include "effect_transfer.hpp"
 
 #define VKBASALT_NAME "VK_LAYER_VKBASALT_post_processing"
@@ -129,7 +130,8 @@ namespace vkBasalt
     std::shared_ptr<Effect> createConfiguredEffect(LogicalSwapchain*          pLogicalSwapchain,
                                                    const std::string&         effectName,
                                                    const std::vector<VkImage>& inputImages,
-                                                   const std::vector<VkImage>& outputImages)
+                                                   const std::vector<VkImage>& outputImages,
+                                                   Config* effectConfig)
     {
         LogicalDevice* pLogicalDevice = pLogicalSwapchain->pLogicalDevice;
         const VkFormat unormFormat = convertToUNORM(pLogicalSwapchain->format);
@@ -153,26 +155,23 @@ namespace vkBasalt
         if (effectName == "dls")
             return std::make_shared<DlsEffect>(
                 pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get());
-        Config* effectConfig = !isMakoControlledEffect(effectName) && pLogicalSwapchain->customEffectConfig
-                                   ? pLogicalSwapchain->customEffectConfig.get() : pConfig.get();
+        auto module = compileReshadeModule(*effectConfig, effectName, pLogicalSwapchain->imageExtent,
+                                           unormFormat == VK_FORMAT_A2R10G10B10_UNORM_PACK32);
         return std::make_shared<ReshadeEffect>(pLogicalDevice,
                                                pLogicalSwapchain->format,
                                                pLogicalSwapchain->imageExtent,
                                                inputImages,
                                                outputImages,
                                                effectConfig,
-                                               effectName);
+                                               effectName, std::move(module));
     }
 
     std::shared_ptr<EffectGraph> buildEffectGraph(LogicalSwapchain* pLogicalSwapchain,
                                                   const std::vector<std::string>& effectNames)
     {
         const auto key = effectGraphKey(effectNames);
-        const auto cached = pLogicalSwapchain->effectGraphs.find(key);
-        if (cached != pLogicalSwapchain->effectGraphs.end())
-            return cached->second;
-
         auto graph = std::make_shared<EffectGraph>();
+        graph->config = std::make_shared<Config>(*pConfig);
         graph->effectNames = effectNames;
         LogicalDevice* pLogicalDevice = pLogicalSwapchain->pLogicalDevice;
 
@@ -201,7 +200,7 @@ namespace vkBasalt
                 const auto& outputImages = i + 1 == effectNames.size()
                                                ? finalImages
                                                : pLogicalSwapchain->intermediateImageSets[i];
-                graph->effects.push_back(createConfiguredEffect(pLogicalSwapchain, effectNames[i], inputImages, outputImages));
+                graph->effects.push_back(createConfiguredEffect(pLogicalSwapchain, effectNames[i], inputImages, outputImages, graph->config.get()));
             }
 
             if (!pLogicalDevice->supportsMutableFormat)
@@ -221,64 +220,97 @@ namespace vkBasalt
         const VkFormat depthFormat = useDepth ? pLogicalDevice->depthFormats[0] : VK_FORMAT_UNDEFINED;
         graph->commandBuffers = allocateCommandBuffer(pLogicalDevice, pLogicalSwapchain->imageCount);
         writeCommandBuffers(pLogicalDevice, graph->effects, depthImage, depthImageView, depthFormat, graph->commandBuffers);
-        pLogicalSwapchain->effectGraphs.emplace(key, graph);
         Logger::info("prepared effect graph: " + (key.empty() ? std::string("off") : key));
         return graph;
     }
 
-    void updateLiveEffectGraph(LogicalSwapchain* pLogicalSwapchain)
+    void trimIntermediateImageSets(LogicalSwapchain* swapchain, size_t count)
+    {
+        auto* device = swapchain->pLogicalDevice;
+        while (swapchain->intermediateImageSets.size() > count)
+        {
+            for (auto image : swapchain->intermediateImageSets.back())
+                device->vkd.DestroyImage(device->device, image, nullptr);
+            device->vkd.FreeMemory(device->device, swapchain->intermediateImageMemories.back(), nullptr);
+            swapchain->intermediateImageSets.pop_back();
+            swapchain->intermediateImageMemories.pop_back();
+        }
+    }
+
+    void updateLiveEffectGraph(LogicalSwapchain* swapchain)
     {
         const uint64_t revision = pConfig->revision();
-        if (pLogicalSwapchain->effectSelectionRevision == revision)
+        if (swapchain->effectSelectionRevision == revision || !swapchain->activeEffectGraph)
             return;
 
         const auto requested = pConfig->getOption<std::vector<std::string>>("effects", {"cas"});
-        if (pLogicalSwapchain->activeEffectGraph == nullptr)
-            return;
-        const auto& active = pLogicalSwapchain->activeEffectGraph->effectNames;
-        const auto live = liveEffectSelection(active, requested);
-        if (customEffects(active) != customEffects(requested))
-            Logger::info("custom effect changes require a restart; bundled changes remain live");
-        if (effectGraphKey(live) == effectGraphKey(active))
+        const auto& active = swapchain->activeEffectGraph;
+        if (requested == active->effectNames && (requested.empty() || !pConfig->effectOptionsChanged(*active->config)))
         {
-            pLogicalSwapchain->effectSelectionRevision = revision;
+            swapchain->effectSelectionRevision = revision;
+            return;
+        }
+        if (!canChangeEffectSelectionLive(requested))
+        {
+            swapchain->effectSelectionRevision = revision;
+            Logger::warn("ignored invalid live effect selection");
             return;
         }
 
-        if (!canChangeEffectSelectionLive(active, live))
-        {
-            pLogicalSwapchain->effectSelectionRevision = revision;
-            Logger::warn("ignored invalid live bundled effect selection");
-            return;
-        }
-
-        const auto key = effectGraphKey(live);
-        LogicalDevice* pLogicalDevice = pLogicalSwapchain->pLogicalDevice;
-        const VkResult idleResult = pLogicalDevice->vkd.QueueWaitIdle(pLogicalDevice->queue);
+        auto* device = swapchain->pLogicalDevice;
+        // The same queue-drain boundary is used for bundled and custom edits.
+        // Keep the previous graph alive until a complete candidate is ready.
+        const VkResult idleResult = device->vkd.QueueWaitIdle(device->queue);
         if (idleResult != VK_SUCCESS)
         {
             Logger::warn("could not retire the previous live effect graph because the graphics queue did not become idle");
             return;
         }
 
-        pLogicalSwapchain->effectSelectionRevision = revision;
-        pLogicalSwapchain->activeEffectGraph.reset();
-        size_t retiredGraphs = 0;
-        for (auto graph = pLogicalSwapchain->effectGraphs.begin();
-             graph != pLogicalSwapchain->effectGraphs.end();)
+        const auto key = effectGraphKey(requested);
+        std::shared_ptr<EffectGraph> candidate;
+        try
         {
-            if (shouldRetainEffectGraph(graph->first, key))
+            candidate = requested.empty() ? swapchain->effectGraphs.at("") : buildEffectGraph(swapchain, requested);
+        }
+        catch (const std::exception& error)
+        {
+            // Do not recompile the same bad edit on every present. A later
+            // configuration revision can retry; the running graph is unchanged.
+            swapchain->effectSelectionRevision = revision;
+            const auto count = active->effectNames.size();
+            trimIntermediateImageSets(swapchain, count > 0 ? count - 1 : 0);
+            Logger::warn(std::string("live effect update rejected; keeping previous graph: ") + error.what());
+            return;
+        }
+
+        // Construction can submit texture uploads. Drain again before retiring
+        // graph-owned resources; no per-frame wait is added to unchanged graphs.
+        if (device->vkd.QueueWaitIdle(device->queue) != VK_SUCCESS)
+        {
+            // A device/queue failure cannot establish safe destruction. Leave
+            // the candidate owned until swapchain teardown and retry later.
+            swapchain->effectGraphs.emplace("pending/" + std::to_string(revision), candidate);
+            swapchain->effectSelectionRevision = revision;
+            Logger::warn("could not commit the prepared live effect graph");
+            return;
+        }
+        swapchain->effectSelectionRevision = revision;
+        swapchain->activeEffectGraph = candidate;
+        size_t retiredGraphs = 0;
+        for (auto graph = swapchain->effectGraphs.begin(); graph != swapchain->effectGraphs.end();)
+        {
+            if (graph->first.empty())
             {
                 ++graph;
                 continue;
             }
-
-            graph->second->destroy(pLogicalDevice);
-            graph = pLogicalSwapchain->effectGraphs.erase(graph);
-            retiredGraphs++;
+            graph->second->destroy(device);
+            graph = swapchain->effectGraphs.erase(graph);
+            ++retiredGraphs;
         }
-
-        pLogicalSwapchain->activeEffectGraph = buildEffectGraph(pLogicalSwapchain, live);
+        swapchain->effectGraphs[key] = candidate;
+        trimIntermediateImageSets(swapchain, requested.empty() ? 0 : requested.size() - 1);
         Logger::info("activated live effect graph: " + (key.empty() ? std::string("off") : key));
         if (retiredGraphs > 0)
             Logger::info("retired " + std::to_string(retiredGraphs) + " inactive live effect graph(s)");
@@ -640,10 +672,23 @@ namespace vkBasalt
         Logger::debug("created application-facing fake swapchain images");
 
         const auto effectStrings = pConfig->getOption<std::vector<std::string>>("effects", {"cas"});
-        if (!customEffects(effectStrings).empty())
-            pLogicalSwapchain->customEffectConfig = std::make_shared<Config>(*pConfig);
-        pLogicalSwapchain->activeEffectGraph = buildEffectGraph(pLogicalSwapchain, effectStrings);
-        buildEffectGraph(pLogicalSwapchain, {});
+        auto fallback = buildEffectGraph(pLogicalSwapchain, {});
+        pLogicalSwapchain->effectGraphs.emplace("", fallback);
+        pLogicalSwapchain->activeEffectGraph = fallback;
+        try
+        {
+            if (!effectStrings.empty())
+            {
+                auto graph = buildEffectGraph(pLogicalSwapchain, effectStrings);
+                pLogicalSwapchain->effectGraphs.emplace(effectGraphKey(effectStrings), graph);
+                pLogicalSwapchain->activeEffectGraph = graph;
+            }
+        }
+        catch (const std::exception& error)
+        {
+            trimIntermediateImageSets(pLogicalSwapchain, 0);
+            Logger::warn(std::string("initial effect graph rejected; using passthrough: ") + error.what());
+        }
         pLogicalSwapchain->effectSelectionRevision = pConfig->revision();
         pLogicalSwapchain->semaphores = createSemaphores(pLogicalDevice, pLogicalSwapchain->imageCount);
         Logger::debug("created semaphores");

@@ -23,3 +23,23 @@ toggle_key_poll_test = executable(
 )
 
 test('toggle key polling interval', toggle_key_poll_test)
+
+reshade_module_test = executable(
+    'reshade_module_test',
+    'reshade_module_test.cpp',
+    '../src/stb_image.c',
+    '../src/config.cpp',
+    '../src/logger.cpp',
+    include_directories: include_directories('../src'),
+    dependencies: reshade_dep,
+)
+test('live custom shader compilation', reshade_module_test)
+
+descriptor_set_test = executable(
+    'descriptor_set_test',
+    'descriptor_set_test.cpp',
+    '../src/descriptor_set.cpp',
+    '../src/logger.cpp',
+    include_directories: include_directories('../src'),
+)
+test('sampler-free shader descriptors', descriptor_set_test)

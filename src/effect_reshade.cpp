@@ -34,7 +34,8 @@ namespace vkBasalt
                                  std::vector<VkImage> inputImages,
                                  std::vector<VkImage> outputImages,
                                  Config*              pConfig,
-                                 std::string          effectName)
+                                 std::string          effectName,
+                                 PreparedReshadeModule compiledModule)
     {
         Logger::debug("in creating ReshadeEffect");
 
@@ -54,7 +55,14 @@ namespace vkBasalt
         outputImageViewsUNORM = createImageViews(pLogicalDevice, inputOutputFormatUNORM, outputImages);
         Logger::debug("created ImageViews");
 
-        createReshadeModule();
+        module = std::move(compiledModule.module);
+        VkShaderModuleCreateInfo shaderCreateInfo{};
+        shaderCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        shaderCreateInfo.codeSize = module.spirv.size() * sizeof(uint32_t);
+        shaderCreateInfo.pCode = module.spirv.data();
+        VkResult shaderResult = pLogicalDevice->vkd.CreateShaderModule(
+            pLogicalDevice->device, &shaderCreateInfo, nullptr, &shaderModule);
+        ASSERT_VULKAN(shaderResult);
 
         enumerateReshadeUniforms(module);
 
@@ -246,37 +254,18 @@ namespace vkBasalt
                         break;
                 }
 
-                std::string          filePath = pConfig->getOption<std::string>("reshadeTexturePath") + "/" + source->value.string_data;
-                stbi_uc*             pixels;
+                auto& loaded = compiledModule.textures.at(module.textures[i].unique_name);
+                stbi_uc* pixels = loaded.pixels.data();
                 std::vector<stbi_uc> resizedPixels;
-                uint32_t             size;
-                int                  width;
-                int                  height;
-
-                size = textureExtent.width * textureExtent.height * desiredChannels;
-
-                FILE* const file = fopen(filePath.c_str(), "rb");
-
-                if (file == nullptr)
-                {
-                    Logger::err("couldn't open texture: " + filePath);
-                }
-                if (stbi_dds_test_file(file))
-                {
-                    int channels;
-                    pixels = stbi_dds_load_from_file(file, &width, &height, &channels, desiredChannels);
-                }
-                else
-                {
-                    int channels;
-                    pixels = stbi_load_from_file(file, &width, &height, &channels, desiredChannels);
-                }
+                const int width = loaded.width;
+                const int height = loaded.height;
+                uint32_t size = textureExtent.width * textureExtent.height * desiredChannels;
 
                 // change RGBA to RG
                 if (textureFormatsUNORM[module.textures[i].unique_name] == VK_FORMAT_R8G8_UNORM)
                 {
                     uint32_t pos = 0;
-                    for (uint32_t j = 0; j < size; j += 4)
+                    for (size_t j = 0; j < loaded.pixels.size(); j += 4)
                     {
                         pixels[pos] = pixels[j];
                         pos++;
@@ -295,7 +284,6 @@ namespace vkBasalt
 
                 uploadToImage(
                     pLogicalDevice, images[0], textureExtent, size, resizedPixels.size() ? resizedPixels.data() : pixels, module.textures[i].levels);
-                stbi_image_free(pixels);
             }
         }
 
@@ -322,7 +310,9 @@ namespace vkBasalt
         bufferPoolSize.type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         bufferPoolSize.descriptorCount = 3;
 
-        std::vector<VkDescriptorPoolSize> poolSizes = {imagePoolSize, bufferPoolSize};
+        std::vector<VkDescriptorPoolSize> poolSizes = {bufferPoolSize};
+        if (imagePoolSize.descriptorCount > 0)
+            poolSizes.push_back(imagePoolSize);
 
         descriptorPool = createDescriptorPool(pLogicalDevice, poolSizes);
         Logger::debug("created descriptorPool");
@@ -938,8 +928,9 @@ namespace vkBasalt
 
         Logger::debug("after the first pipeline barrier");
 
-        pLogicalDevice->vkd.CmdBindDescriptorSets(
-            commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1, &(inputDescriptorSets[imageIndex]), 0, nullptr);
+        if (!inputDescriptorSets.empty())
+            pLogicalDevice->vkd.CmdBindDescriptorSets(
+                commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1, &(inputDescriptorSets[imageIndex]), 0, nullptr);
         Logger::debug("after binding image sampler");
 
         if (bufferSize)
@@ -967,7 +958,7 @@ namespace vkBasalt
             pLogicalDevice->vkd.CmdEndRenderPass(commandBuffer);
             Logger::debug("after end renderpass");
 
-            if (switchSamplers[i] && outputWrites > 1)
+            if (!inputDescriptorSets.empty() && switchSamplers[i] && outputWrites > 1)
             {
                 if (backBufferNext)
                 {
@@ -1130,63 +1121,6 @@ namespace vkBasalt
         {
             pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, memory, nullptr);
         }
-    }
-
-    void ReshadeEffect::createReshadeModule()
-    {
-        std::string tempFile  = "/tmp/vkBasalt.spv";
-        std::string tempFile2 = "/tmp/vkBasalt.spv";
-
-        reshadefx::preprocessor preprocessor;
-        preprocessor.add_macro_definition("__RESHADE__", std::to_string(INT_MAX));
-        preprocessor.add_macro_definition("__RESHADE_PERFORMANCE_MODE__", "1");
-        preprocessor.add_macro_definition("__RENDERER__", "0x20000");
-        // TODO add more macros
-
-        preprocessor.add_macro_definition("BUFFER_WIDTH", std::to_string(imageExtent.width));
-        preprocessor.add_macro_definition("BUFFER_HEIGHT", std::to_string(imageExtent.height));
-        preprocessor.add_macro_definition("BUFFER_RCP_WIDTH", "(1.0 / BUFFER_WIDTH)");
-        preprocessor.add_macro_definition("BUFFER_RCP_HEIGHT", "(1.0 / BUFFER_HEIGHT)");
-        preprocessor.add_macro_definition("BUFFER_COLOR_DEPTH", (inputOutputFormatUNORM == VK_FORMAT_A2R10G10B10_UNORM_PACK32) ? "10" : "8");
-        const auto includePath = pConfig->getOption<std::string>("reshadeIncludePath");
-        if (!includePath.empty())
-            preprocessor.add_include_path(includePath);
-        if (!preprocessor.append_file(pConfig->getOption<std::string>(effectName)))
-        {
-            Logger::err("failed to load shader file: " + pConfig->getOption<std::string>(effectName));
-            Logger::err("Does the filepath exist and does it not include spaces?");
-        }
-
-        reshadefx::parser parser;
-
-        std::string errors = preprocessor.errors();
-        if (errors != "")
-        {
-            Logger::err(errors);
-        }
-
-        std::unique_ptr<reshadefx::codegen> codegen(reshadefx::create_codegen_spirv(
-            true /* vulkan semantics */, true /* debug info */, true /* uniforms to spec constants */, true /*flip vertex shader*/));
-        parser.parse(std::move(preprocessor.output()), codegen.get());
-
-        errors = parser.errors();
-        if (errors != "")
-        {
-            Logger::err(errors);
-        }
-        codegen->write_result(module);
-
-        VkShaderModuleCreateInfo shaderCreateInfo;
-        shaderCreateInfo.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        shaderCreateInfo.pNext    = nullptr;
-        shaderCreateInfo.flags    = 0;
-        shaderCreateInfo.codeSize = module.spirv.size() * sizeof(uint32_t);
-        shaderCreateInfo.pCode    = module.spirv.data();
-
-        VkResult result = pLogicalDevice->vkd.CreateShaderModule(pLogicalDevice->device, &shaderCreateInfo, nullptr, &shaderModule);
-        ASSERT_VULKAN(result);
-
-        Logger::debug("created reshade shaderModule");
     }
 
     VkFormat ReshadeEffect::convertReshadeFormat(reshadefx::texture_format texFormat)

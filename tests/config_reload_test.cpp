@@ -58,6 +58,23 @@ int main()
     assert(customSnapshot.getOption<std::string>("CustomBorder") == "/tmp/Border.fx");
     assert(customSnapshot.getOption<std::string>("reshadeIncludePath") == "/tmp/includes");
 
+    vkBasalt::Config structuralSnapshot(config);
+    writeConfigAtomically(configPath, "effects = CustomBorder:cas\ncasSharpness = 0.65\ndlsSharpness = 0.3\ndlsDenoise = 0.2\n");
+    assert(config.reloadIfChanged());
+    assert(!config.effectOptionsChanged(structuralSnapshot));
+    writeConfigAtomically(configPath, "effects = CustomBorder:cas\nCustomBorder = /tmp/NewBorder.fx\n");
+    assert(config.reloadIfChanged());
+    assert(config.effectOptionsChanged(structuralSnapshot));
+    vkBasalt::Config pathSnapshot(config);
+    writeConfigAtomically(configPath, "effects = CustomBorder:cas\nCustomBorder = /tmp/NewBorder.fx\nreshadeIncludePath = /tmp/new-includes\nBorderWidth = 0.2\n");
+    assert(config.reloadIfChanged());
+    assert(config.effectOptionsChanged(pathSnapshot));
+    // A failed selection is retryable after an ordinary atomic save, even when
+    // it returns to the exact previously working configuration.
+    writeConfigAtomically(configPath, "effects = makoVibrance:cas\n");
+    assert(config.reloadIfChanged());
+    assert(!config.effectOptionsChanged(structuralSnapshot));
+
     std::filesystem::remove_all(directory);
     return 0;
 }

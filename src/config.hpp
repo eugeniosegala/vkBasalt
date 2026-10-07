@@ -23,6 +23,7 @@ namespace vkBasalt
         bool reloadIfChanged();
         const std::string& configFilePath() const;
         uint64_t revision() const;
+        bool effectOptionsChanged(const Config& other) const;
 
         template<typename T>
         T getOption(const std::string& option, const T& defaultValue = {})

@@ -19,6 +19,7 @@ namespace vkBasalt
 {
     struct EffectGraph
     {
+        std::shared_ptr<Config>             config;
         std::vector<std::string>            effectNames;
         std::vector<std::shared_ptr<Effect>> effects;
         std::vector<VkCommandBuffer>         commandBuffers;
@@ -40,9 +41,6 @@ namespace vkBasalt
         std::vector<VkDeviceMemory>          intermediateImageMemories;
         std::vector<VkImage>                 nonMutableOutputImages;
         std::vector<VkSemaphore>             semaphores;
-        // Snapshot custom definitions/options so pending deletion or path edits
-        // cannot break a graph rebuilt for an unrelated bundled selection.
-        std::shared_ptr<Config>               customEffectConfig;
         std::map<std::string, std::shared_ptr<EffectGraph>> effectGraphs;
         std::shared_ptr<EffectGraph>          activeEffectGraph;
         VkDeviceMemory                       fakeImageMemory = VK_NULL_HANDLE;

@@ -121,6 +121,19 @@ namespace vkBasalt
         return configRevision;
     }
 
+    bool Config::effectOptionsChanged(const Config& other) const
+    {
+        // These values have their own live uniform/toggle path. Everything else
+        // can affect compilation, paths, or shader specialization constants.
+        const auto structural = [](const auto& options) {
+            auto result = options;
+            for (const auto* key : {"effects", "casSharpness", "dlsSharpness", "dlsDenoise", "toggleKey", "enableOnLaunch"})
+                result.erase(key);
+            return result;
+        };
+        return structural(options) != structural(other.options);
+    }
+
     void Config::readConfigFile(std::ifstream& stream)
     {
         std::string line;

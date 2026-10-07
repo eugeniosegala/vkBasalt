@@ -39,6 +39,11 @@ jobs:
             spirv-headers \
             xz-utils
 
+      - name: Test live configuration and custom shader compilation
+        run: |
+          meson setup build-test --buildtype=debug -Dwith_json=false
+          meson test -C build-test --print-errorlogs
+
       - name: Build and verify release archive
         run: |
           scripts/package-mako-release.sh \
