@@ -25,6 +25,7 @@ namespace vkBasalt
         virtual ~SimpleEffect();
 
     protected:
+        SimpleEffect& operator=(SimpleEffect&&) = default;
         LogicalDevice*               pLogicalDevice;
         std::vector<VkImage>         inputImages;
         std::vector<VkImage>         outputImages;
@@ -32,16 +33,16 @@ namespace vkBasalt
         std::vector<VkImageView>     outputImageViews;
         std::vector<VkDescriptorSet> imageDescriptorSets;
         std::vector<VkFramebuffer>   framebuffers;
-        VkDescriptorSetLayout        imageSamplerDescriptorSetLayout;
-        VkDescriptorPool             descriptorPool;
-        VkShaderModule               vertexModule;
-        VkShaderModule               fragmentModule;
-        VkRenderPass                 renderPass;
-        VkPipelineLayout             pipelineLayout;
-        VkPipeline                   graphicsPipeline;
+        VkDescriptorSetLayout        imageSamplerDescriptorSetLayout = VK_NULL_HANDLE;
+        VkDescriptorPool             descriptorPool = VK_NULL_HANDLE;
+        VkShaderModule               vertexModule = VK_NULL_HANDLE;
+        VkShaderModule               fragmentModule = VK_NULL_HANDLE;
+        VkRenderPass                 renderPass = VK_NULL_HANDLE;
+        VkPipelineLayout             pipelineLayout = VK_NULL_HANDLE;
+        VkPipeline                   graphicsPipeline = VK_NULL_HANDLE;
         VkExtent2D                   imageExtent;
         VkFormat                     format;
-        VkSampler                    sampler;
+        VkSampler                    sampler = VK_NULL_HANDLE;
         Config*                      pConfig;
         VkDescriptorSetLayout        dynamicUniformDescriptorSetLayout = VK_NULL_HANDLE;
         std::vector<VkBuffer>         dynamicUniformBuffers;

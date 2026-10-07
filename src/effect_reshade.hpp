@@ -40,6 +40,9 @@ namespace vkBasalt
         virtual ~ReshadeEffect();
 
     private:
+        ReshadeEffect() = default;
+        ReshadeEffect& operator=(ReshadeEffect&&) = default;
+        void destroyResources();
         LogicalDevice*           pLogicalDevice;
         std::vector<VkImage>     inputImages;
         std::vector<VkImage>     outputImages;
@@ -65,14 +68,14 @@ namespace vkBasalt
 
         std::vector<std::vector<VkFramebuffer>> framebuffers;
 
-        VkDescriptorSetLayout                 uniformDescriptorSetLayout;
-        VkDescriptorSetLayout                 imageSamplerDescriptorSetLayout;
-        VkShaderModule                        shaderModule;
-        VkDescriptorPool                      descriptorPool;
+        VkDescriptorSetLayout                 uniformDescriptorSetLayout = VK_NULL_HANDLE;
+        VkDescriptorSetLayout                 imageSamplerDescriptorSetLayout = VK_NULL_HANDLE;
+        VkShaderModule                        shaderModule = VK_NULL_HANDLE;
+        VkDescriptorPool                      descriptorPool = VK_NULL_HANDLE;
         std::vector<VkRenderPass>             renderPasses;
         std::vector<std::vector<std::string>> renderTargets;
         std::vector<VkRenderPassBeginInfo>    renderPassBeginInfos;
-        VkPipelineLayout                      pipelineLayout;
+        VkPipelineLayout                      pipelineLayout = VK_NULL_HANDLE;
         std::vector<VkPipeline>               graphicsPipelines;
         std::vector<bool>                     switchSamplers;
         VkExtent2D                            imageExtent;
@@ -93,11 +96,11 @@ namespace vkBasalt
         std::vector<VkImage>     backBufferImages;
         std::vector<VkImageView> backBufferImageViewsUNORM;
         std::vector<VkImageView> backBufferImageViewsSRGB;
-        VkBuffer                 stagingBuffer;
-        VkDeviceMemory           stagingBufferMemory;
+        VkBuffer                 stagingBuffer = VK_NULL_HANDLE;
+        VkDeviceMemory           stagingBufferMemory = VK_NULL_HANDLE;
         void*                    stagingBufferMapping = nullptr;
-        uint32_t                 bufferSize;
-        VkDescriptorSet          bufferDescriptorSet;
+        uint32_t                 bufferSize = 0;
+        VkDescriptorSet          bufferDescriptorSet = VK_NULL_HANDLE;
 
         std::vector<std::shared_ptr<ReshadeUniform>> uniforms;
 

@@ -28,12 +28,15 @@ namespace vkBasalt
         void applyEffect(uint32_t imageIndex, VkCommandBuffer commandBuffer) override;
 
     private:
-        VkImage               lutImage;
-        VkDeviceMemory        lutMemory;
-        VkImageView           lutImageView;
-        VkDescriptorSetLayout lutDescriptorSetLayout;
-        VkDescriptorPool      lutDescriptorPool;
-        VkDescriptorSet       lutDescriptorSet;
+        LutEffect() = default;
+        LutEffect& operator=(LutEffect&&) = default;
+        void destroyResources();
+        VkImage               lutImage = VK_NULL_HANDLE;
+        VkDeviceMemory        lutMemory = VK_NULL_HANDLE;
+        VkImageView           lutImageView = VK_NULL_HANDLE;
+        VkDescriptorSetLayout lutDescriptorSetLayout = VK_NULL_HANDLE;
+        VkDescriptorPool      lutDescriptorPool = VK_NULL_HANDLE;
+        VkDescriptorSet       lutDescriptorSet = VK_NULL_HANDLE;
     };
 } // namespace vkBasalt
 

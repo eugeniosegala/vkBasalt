@@ -26,6 +26,18 @@ namespace vkBasalt
                            std::vector<VkImage> outputImages,
                            Config*              pConfig)
     {
+        this->pLogicalDevice = pLogicalDevice;
+        auto rescue = std::shared_ptr<SmaaEffect>(new SmaaEffect);
+        rescue->pLogicalDevice = pLogicalDevice;
+        pLogicalDevice->pendingUploadEffects.reserve(pLogicalDevice->pendingUploadEffects.size() + 1);
+        ScopeExit rollback([&] {
+            if (pLogicalDevice->uploadQueueUncertain) {
+                *rescue = std::move(*this);
+                pLogicalDevice->pendingUploadEffects.push_back(std::move(rescue));
+            } else {
+                destroyResources();
+            }
+        });
         Logger::debug("in creating SmaaEffect");
 
         this->pLogicalDevice = pLogicalDevice;
@@ -204,7 +216,8 @@ namespace vkBasalt
         edgeFramebuffers     = createFramebuffers(pLogicalDevice, unormRenderPass, imageExtent, {edgeImageViews});
         blendFramebuffers    = createFramebuffers(pLogicalDevice, unormRenderPass, imageExtent, {blendImageViews});
         neignborFramebuffers = createFramebuffers(pLogicalDevice, renderPass, imageExtent, {outputImageViews});
-    }
+            rollback.release();
+}
     void SmaaEffect::applyEffect(uint32_t imageIndex, VkCommandBuffer commandBuffer)
     {
         Logger::debug("applying smaa effect to cb " + convertToString(commandBuffer));
@@ -329,8 +342,11 @@ namespace vkBasalt
                                                &secondBarrier);
         Logger::debug("after the second pipeline barrier");
     }
-    SmaaEffect::~SmaaEffect()
+    SmaaEffect::~SmaaEffect() { destroyResources(); }
+
+    void SmaaEffect::destroyResources()
     {
+        if (pLogicalDevice->destroyed) return;
         Logger::debug("destroying smaa effect " + convertToString(this));
         pLogicalDevice->vkd.DestroyPipeline(pLogicalDevice->device, edgePipeline, nullptr);
         pLogicalDevice->vkd.DestroyPipeline(pLogicalDevice->device, blendPipeline, nullptr);
@@ -349,18 +365,15 @@ namespace vkBasalt
         pLogicalDevice->vkd.DestroyShaderModule(pLogicalDevice->device, neignborFragmentModule, nullptr);
 
         pLogicalDevice->vkd.DestroyDescriptorPool(pLogicalDevice->device, descriptorPool, nullptr);
-        for (unsigned int i = 0; i < edgeFramebuffers.size(); i++)
-        {
-            pLogicalDevice->vkd.DestroyFramebuffer(pLogicalDevice->device, edgeFramebuffers[i], nullptr);
-            pLogicalDevice->vkd.DestroyFramebuffer(pLogicalDevice->device, blendFramebuffers[i], nullptr);
-            pLogicalDevice->vkd.DestroyFramebuffer(pLogicalDevice->device, neignborFramebuffers[i], nullptr);
-            pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, inputImageViews[i], nullptr);
-            pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, edgeImageViews[i], nullptr);
-            pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, blendImageViews[i], nullptr);
-            pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, outputImageViews[i], nullptr);
-            pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, edgeImages[i], nullptr);
-            pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, blendImages[i], nullptr);
-        }
+        for (auto handle : edgeFramebuffers) pLogicalDevice->vkd.DestroyFramebuffer(pLogicalDevice->device, handle, nullptr);
+        for (auto handle : blendFramebuffers) pLogicalDevice->vkd.DestroyFramebuffer(pLogicalDevice->device, handle, nullptr);
+        for (auto handle : neignborFramebuffers) pLogicalDevice->vkd.DestroyFramebuffer(pLogicalDevice->device, handle, nullptr);
+        for (auto handle : inputImageViews) pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, handle, nullptr);
+        for (auto handle : edgeImageViews) pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, handle, nullptr);
+        for (auto handle : blendImageViews) pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, handle, nullptr);
+        for (auto handle : outputImageViews) pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, handle, nullptr);
+        for (auto handle : edgeImages) pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, handle, nullptr);
+        for (auto handle : blendImages) pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, handle, nullptr);
         Logger::debug("after DestroyImageView");
         pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, areaImageView, nullptr);
         pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, areaImage, nullptr);

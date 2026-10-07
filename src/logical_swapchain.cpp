@@ -43,11 +43,18 @@ namespace vkBasalt
             if (fakeImageMemory != VK_NULL_HANDLE)
                 pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, fakeImageMemory, nullptr);
 
-            for (unsigned int i = 0; i < imageCount; i++)
-            {
-                pLogicalDevice->vkd.DestroySemaphore(pLogicalDevice->device, semaphores[i], nullptr);
-            }
+            for (auto semaphore : semaphores)
+                pLogicalDevice->vkd.DestroySemaphore(pLogicalDevice->device, semaphore, nullptr);
             Logger::debug("after DestroySemaphore");
         }
+        intermediateImageSets.clear();
+        intermediateImageMemories.clear();
+        nonMutableOutputImages.clear();
+        semaphores.clear();
+        images.clear();
+        fakeImages.clear();
+        fakeImageMemory = VK_NULL_HANDLE;
+        nonMutableOutputMemory = VK_NULL_HANDLE;
+        imageCount = 0;
     }
 } // namespace vkBasalt

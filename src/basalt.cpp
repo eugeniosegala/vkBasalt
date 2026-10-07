@@ -169,6 +169,7 @@ namespace vkBasalt
     std::shared_ptr<EffectGraph> buildEffectGraph(LogicalSwapchain* pLogicalSwapchain,
                                                   const std::vector<std::string>& effectNames)
     {
+        CheckedConstruction checked;
         const auto key = effectGraphKey(effectNames);
         auto graph = std::make_shared<EffectGraph>();
         graph->config = std::make_shared<Config>(*pConfig);
@@ -218,9 +219,11 @@ namespace vkBasalt
         const VkImageView depthImageView = useDepth ? pLogicalDevice->depthImageViews[0] : VK_NULL_HANDLE;
         const VkImage depthImage = useDepth ? pLogicalDevice->depthImages[0] : VK_NULL_HANDLE;
         const VkFormat depthFormat = useDepth ? pLogicalDevice->depthFormats[0] : VK_FORMAT_UNDEFINED;
+        ScopeExit rollback([&] { graph->destroy(pLogicalDevice); });
         graph->commandBuffers = allocateCommandBuffer(pLogicalDevice, pLogicalSwapchain->imageCount);
         writeCommandBuffers(pLogicalDevice, graph->effects, depthImage, depthImageView, depthFormat, graph->commandBuffers);
         Logger::info("prepared effect graph: " + (key.empty() ? std::string("off") : key));
+        rollback.release();
         return graph;
     }
 
@@ -263,10 +266,12 @@ namespace vkBasalt
         const VkResult idleResult = device->vkd.QueueWaitIdle(device->queue);
         if (idleResult != VK_SUCCESS)
         {
+            swapchain->effectSelectionRevision = revision;
             Logger::warn("could not retire the previous live effect graph because the graphics queue did not become idle");
             return;
         }
 
+        device->retirePendingUploads();
         const auto key = effectGraphKey(requested);
         std::shared_ptr<EffectGraph> candidate;
         try
@@ -570,16 +575,22 @@ namespace vkBasalt
 
         Logger::trace("vkDestroyDevice");
 
-        LogicalDevice* pLogicalDevice = deviceMap[GetKey(device)].get();
-        if (pLogicalDevice->commandPool != VK_NULL_HANDLE)
-        {
-            Logger::debug("DestroyCommandPool");
-            pLogicalDevice->vkd.DestroyCommandPool(device, pLogicalDevice->commandPool, pAllocator);
+        const auto deviceKey = GetKey(device);
+        LogicalDevice* pLogicalDevice = deviceMap[deviceKey].get();
+        if (!pLogicalDevice->pendingUploads.empty()) {
+            const auto idle = pLogicalDevice->vkd.DeviceWaitIdle(device);
+            if (idle == VK_SUCCESS || idle == VK_ERROR_DEVICE_LOST)
+                pLogicalDevice->retirePendingUploads();
         }
-
+        if (pLogicalDevice->commandPool != VK_NULL_HANDLE && pLogicalDevice->pendingUploads.empty())
+            pLogicalDevice->vkd.DestroyCommandPool(device, pLogicalDevice->commandPool, pAllocator);
         pLogicalDevice->vkd.DestroyDevice(device, pAllocator);
-
-        deviceMap.erase(GetKey(device));
+        // If quiescence could not be established, driver teardown releases the
+        // remaining device objects; CPU owners must not call a dead dispatch.
+        pLogicalDevice->destroyed = true;
+        pLogicalDevice->pendingUploads.clear();
+        pLogicalDevice->pendingUploadEffects.clear();
+        deviceMap.erase(deviceKey);
     }
 
     VKAPI_ATTR VkResult VKAPI_CALL vkBasalt_CreateSwapchainKHR(VkDevice                        device,
@@ -661,42 +672,58 @@ namespace vkBasalt
             return *pCount < pLogicalSwapchain->imageCount ? VK_INCOMPLETE : VK_SUCCESS;
         }
 
-        pLogicalDevice->vkd.GetSwapchainImagesKHR(device, swapchain, &pLogicalSwapchain->imageCount, nullptr);
-        pLogicalSwapchain->images.resize(pLogicalSwapchain->imageCount);
-        pLogicalDevice->vkd.GetSwapchainImagesKHR(device, swapchain, &pLogicalSwapchain->imageCount, pLogicalSwapchain->images.data());
-
-        pLogicalSwapchain->fakeImages = createFakeSwapchainImages(pLogicalDevice,
-                                                                  pLogicalSwapchain->swapchainCreateInfo,
-                                                                  pLogicalSwapchain->imageCount,
-                                                                  pLogicalSwapchain->fakeImageMemory);
-        Logger::debug("created application-facing fake swapchain images");
-
-        const auto effectStrings = pConfig->getOption<std::vector<std::string>>("effects", {"cas"});
-        auto fallback = buildEffectGraph(pLogicalSwapchain, {});
-        pLogicalSwapchain->effectGraphs.emplace("", fallback);
-        pLogicalSwapchain->activeEffectGraph = fallback;
         try
         {
-            if (!effectStrings.empty())
+            CheckedConstruction checked;
+            ASSERT_VULKAN(pLogicalDevice->vkd.GetSwapchainImagesKHR(device, swapchain, &pLogicalSwapchain->imageCount, nullptr));
+            pLogicalSwapchain->images.resize(pLogicalSwapchain->imageCount);
+            ASSERT_VULKAN(pLogicalDevice->vkd.GetSwapchainImagesKHR(device, swapchain, &pLogicalSwapchain->imageCount, pLogicalSwapchain->images.data()));
+
+            pLogicalSwapchain->fakeImages = createFakeSwapchainImages(pLogicalDevice,
+                                                                      pLogicalSwapchain->swapchainCreateInfo,
+                                                                      pLogicalSwapchain->imageCount,
+                                                                      pLogicalSwapchain->fakeImageMemory);
+            Logger::debug("created application-facing fake swapchain images");
+
+            const auto effectStrings = pConfig->getOption<std::vector<std::string>>("effects", {"cas"});
+            auto fallback = buildEffectGraph(pLogicalSwapchain, {});
+            pLogicalSwapchain->effectGraphs.emplace("", fallback);
+            pLogicalSwapchain->activeEffectGraph = fallback;
+            try
             {
-                auto graph = buildEffectGraph(pLogicalSwapchain, effectStrings);
-                pLogicalSwapchain->effectGraphs.emplace(effectGraphKey(effectStrings), graph);
-                pLogicalSwapchain->activeEffectGraph = graph;
+                if (!effectStrings.empty())
+                {
+                    auto graph = buildEffectGraph(pLogicalSwapchain, effectStrings);
+                    pLogicalSwapchain->effectGraphs.emplace(effectGraphKey(effectStrings), graph);
+                    pLogicalSwapchain->activeEffectGraph = graph;
+                }
             }
+            catch (const std::exception& error)
+            {
+                trimIntermediateImageSets(pLogicalSwapchain, 0);
+                Logger::warn(std::string("initial effect graph rejected; using passthrough: ") + error.what());
+            }
+            pLogicalSwapchain->effectSelectionRevision = pConfig->revision();
+            pLogicalSwapchain->semaphores = createSemaphores(pLogicalDevice, pLogicalSwapchain->imageCount);
+            Logger::debug("created semaphores");
+            Logger::trace("vkGetSwapchainImagesKHR");
+
+            *pCount = std::min<uint32_t>(*pCount, pLogicalSwapchain->imageCount);
+            std::memcpy(pSwapchainImages, pLogicalSwapchain->fakeImages.data(), sizeof(VkImage) * (*pCount));
+            return *pCount < pLogicalSwapchain->imageCount ? VK_INCOMPLETE : VK_SUCCESS;
+        }
+        catch (const VulkanError& error)
+        {
+            pLogicalSwapchain->destroy();
+            Logger::warn(std::string("swapchain shader resources unavailable: ") + error.what());
+            return error.result;
         }
         catch (const std::exception& error)
         {
-            trimIntermediateImageSets(pLogicalSwapchain, 0);
-            Logger::warn(std::string("initial effect graph rejected; using passthrough: ") + error.what());
+            pLogicalSwapchain->destroy();
+            Logger::warn(std::string("swapchain shader preparation failed: ") + error.what());
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
         }
-        pLogicalSwapchain->effectSelectionRevision = pConfig->revision();
-        pLogicalSwapchain->semaphores = createSemaphores(pLogicalDevice, pLogicalSwapchain->imageCount);
-        Logger::debug("created semaphores");
-        Logger::trace("vkGetSwapchainImagesKHR");
-
-        *pCount = std::min<uint32_t>(*pCount, pLogicalSwapchain->imageCount);
-        std::memcpy(pSwapchainImages, pLogicalSwapchain->fakeImages.data(), sizeof(VkImage) * (*pCount));
-        return *pCount < pLogicalSwapchain->imageCount ? VK_INCOMPLETE : VK_SUCCESS;
     }
 
     VKAPI_ATTR VkResult VKAPI_CALL vkBasalt_QueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo)

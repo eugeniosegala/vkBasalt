@@ -285,7 +285,8 @@ static stbi_uc *stbi__dds_load(stbi__context *s, int *x, int *y, int *comp, int 
 	int block_pitch, num_blocks;
 	int i, sz, cf;
 	DDS_HEADER header;
-	DDS_HEADER_DXT10 header2;
+	/* Bound decoded storage before any allocation or block indexing. */
+	const unsigned int max_decoded_bytes = 256u * 1024u * 1024u;
 
 	// Check the magic number
 	if (!stbi__dds_test(s))
@@ -294,7 +295,7 @@ static stbi_uc *stbi__dds_load(stbi__context *s, int *x, int *y, int *comp, int 
 	}
 
 	// Load the header
-	stbi__getn(s, (stbi_uc *)(&header), sizeof(DDS_HEADER));
+	if (!stbi__getn(s, (stbi_uc *)(&header), sizeof(DDS_HEADER))) return NULL;
 
 	if (header.dwSize != 124)
 	{
@@ -326,6 +327,23 @@ static stbi_uc *stbi__dds_load(stbi__context *s, int *x, int *y, int *comp, int 
 		return NULL;
 	}
 
+	if (header.dwWidth == 0 || header.dwHeight == 0 ||
+        header.dwWidth > 16384 || header.dwHeight > 16384 ||
+        header.dwMipMapCount > 15 || header.dwDepth > 1 ||
+        (header.sCaps.dwCaps2 & DDSCAPS2_CUBEMAP && header.dwWidth != header.dwHeight))
+        return NULL;
+    if (header.sPixelFormat.dwFlags & DDPF_FOURCC) {
+        const unsigned int fourcc = header.sPixelFormat.dwFourCC;
+        if (fourcc != MAKEFOURCC('D', 'X', 'T', '1') &&
+            fourcc != MAKEFOURCC('D', 'X', 'T', '2') &&
+            fourcc != MAKEFOURCC('D', 'X', 'T', '3') &&
+            fourcc != MAKEFOURCC('D', 'X', 'T', '4') &&
+            fourcc != MAKEFOURCC('D', 'X', 'T', '5')) return NULL;
+    } else if (header.sPixelFormat.dwRGBBitCount != 8 &&
+               header.sPixelFormat.dwRGBBitCount != 16 &&
+               header.sPixelFormat.dwRGBBitCount != 24 &&
+               header.sPixelFormat.dwRGBBitCount != 32) return NULL;
+
 	// Get the image information
 	*x = s->img_x = header.dwWidth;
 	*y = s->img_y = header.dwHeight;
@@ -341,15 +359,12 @@ static stbi_uc *stbi__dds_load(stbi__context *s, int *x, int *y, int *comp, int 
 	cubemap_faces *= 5;
 	cubemap_faces += 1;
 
+    if (s->img_x > max_decoded_bytes / 4 / cubemap_faces / s->img_y) return NULL;
 	block_pitch = (s->img_x + 3) >> 2;
 	num_blocks = block_pitch * ((s->img_y + 3) >> 2);
 
 	if (is_compressed)
 	{
-		if (header.sPixelFormat.dwFourCC & MAKEFOURCC('D', 'X', '1', '0'))
-		{
-			stbi__getn(s, (stbi_uc *)(&header2), sizeof(DDS_HEADER_DXT10));
-		}
 
 		/*	compressed	*/
 		//	note: header.sPixelFormat.dwFourCC is something like (('D'<<0)|('X'<<8)|('T'<<16)|('1'<<24))
@@ -360,7 +375,8 @@ static stbi_uc *stbi__dds_load(stbi__context *s, int *x, int *y, int *comp, int 
 		dwPitchOrLinearSize == 0	*/
 		//	passed all the tests, get the RAM for decoding
 		sz = (s->img_x)*(s->img_y) * 4 * cubemap_faces;
-		dds_data = (unsigned char*)malloc(sz);
+		dds_data = (unsigned char*)STBI_MALLOC(sz);
+        if (!dds_data) return NULL;
 		/*	do this once for each face	*/
 		for (cf = 0; cf < cubemap_faces; ++cf)
 		{
@@ -375,23 +391,23 @@ static stbi_uc *stbi__dds_load(stbi__context *s, int *x, int *y, int *comp, int 
 				if (DXT_family == 1)
 				{
 					//	DXT1
-					stbi__getn(s, compressed, 8);
+					if (!stbi__getn(s, compressed, 8)) goto truncated_dds;
 					stbi__dxt_decode_DXT1_block(block, compressed);
 				}
 				else if (DXT_family < 4)
 				{
 					//	DXT2/3
-					stbi__getn(s, compressed, 8);
+					if (!stbi__getn(s, compressed, 8)) goto truncated_dds;
 					stbi__dxt_decode_DXT23_alpha_block(block, compressed);
-					stbi__getn(s, compressed, 8);
+					if (!stbi__getn(s, compressed, 8)) goto truncated_dds;
 					stbi__dxt_decode_DXT_color_block(block, compressed);
 				}
 				else
 				{
 					//	DXT4/5
-					stbi__getn(s, compressed, 8);
+					if (!stbi__getn(s, compressed, 8)) goto truncated_dds;
 					stbi__dxt_decode_DXT45_alpha_block(block, compressed);
-					stbi__getn(s, compressed, 8);
+					if (!stbi__getn(s, compressed, 8)) goto truncated_dds;
 					stbi__dxt_decode_DXT_color_block(block, compressed);
 				}
 				//	is this a partial block?
@@ -425,8 +441,8 @@ static stbi_uc *stbi__dds_load(stbi__context *s, int *x, int *y, int *comp, int 
 				}
 				for (i = 1; i < (int)header.dwMipMapCount; ++i)
 				{
-					int mx = s->img_x >> (i + 2);
-					int my = s->img_y >> (i + 2);
+					int mx = ((s->img_x >> i) + 3) / 4;
+					int my = ((s->img_y >> i) + 3) / 4;
 					if (mx < 1)
 					{
 						mx = 1;
@@ -435,7 +451,14 @@ static stbi_uc *stbi__dds_load(stbi__context *s, int *x, int *y, int *comp, int 
 					{
 						my = 1;
 					}
-					stbi__skip(s, mx*my*block_size);
+					{
+                        int remaining = mx*my*block_size;
+                        while (remaining > 0) {
+                            int chunk = remaining < 8 ? remaining : 8;
+                            if (!stbi__getn(s, compressed, chunk)) goto truncated_dds;
+                            remaining -= chunk;
+                        }
+                    }
 				}
 			}
 		}/* per cubemap face */
@@ -458,12 +481,13 @@ static stbi_uc *stbi__dds_load(stbi__context *s, int *x, int *y, int *comp, int 
 		}
 		*comp = s->img_n;
 		sz = s->img_x*s->img_y*s->img_n*cubemap_faces;
-		dds_data = (unsigned char*)malloc(sz);
+		dds_data = (unsigned char*)STBI_MALLOC(sz);
+        if (!dds_data) return NULL;
 		/*	do this once for each face	*/
 		for (cf = 0; cf < cubemap_faces; ++cf)
 		{
 			/*	read the main image for this face	*/
-			stbi__getn(s, &dds_data[cf*s->img_x*s->img_y*s->img_n], s->img_x*s->img_y*s->img_n);
+			if (!stbi__getn(s, &dds_data[cf*s->img_x*s->img_y*s->img_n], s->img_x*s->img_y*s->img_n)) goto truncated_dds;
 			/*	done reading and decoding the main image...
 			skip MIPmaps if present	*/
 			if (has_mipmap)
@@ -480,7 +504,14 @@ static stbi_uc *stbi__dds_load(stbi__context *s, int *x, int *y, int *comp, int 
 					{
 						my = 1;
 					}
-					stbi__skip(s, mx*my*s->img_n);
+					{
+                        int remaining = mx*my*s->img_n;
+                        while (remaining > 0) {
+                            int chunk = remaining < 8 ? remaining : 8;
+                            if (!stbi__getn(s, compressed, chunk)) goto truncated_dds;
+                            remaining -= chunk;
+                        }
+                    }
 				}
 			}
 		}
@@ -529,6 +560,9 @@ static stbi_uc *stbi__dds_load(stbi__context *s, int *x, int *y, int *comp, int 
 	}
 
 	return dds_data;
+truncated_dds:
+    STBI_FREE(dds_data);
+    return NULL;
 }
 
 #ifndef STBI_NO_STDIO

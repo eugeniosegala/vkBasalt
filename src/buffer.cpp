@@ -10,6 +10,14 @@ namespace vkBasalt
                       VkBuffer&             buffer,
                       VkDeviceMemory&       bufferMemory)
     {
+        buffer = VK_NULL_HANDLE;
+        bufferMemory = VK_NULL_HANDLE;
+        ScopeExit rollback([&] {
+            if (buffer != VK_NULL_HANDLE) pLogicalDevice->vkd.DestroyBuffer(pLogicalDevice->device, buffer, nullptr);
+            if (bufferMemory != VK_NULL_HANDLE) pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, bufferMemory, nullptr);
+            buffer = VK_NULL_HANDLE;
+            bufferMemory = VK_NULL_HANDLE;
+        });
         VkBufferCreateInfo bufferInfo = {};
 
         bufferInfo.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -34,6 +42,7 @@ namespace vkBasalt
 
         result = pLogicalDevice->vkd.BindBufferMemory(pLogicalDevice->device, buffer, bufferMemory, 0);
         ASSERT_VULKAN(result);
+        rollback.release();
     }
 
 } // namespace vkBasalt

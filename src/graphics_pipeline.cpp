@@ -33,7 +33,7 @@ namespace vkBasalt
     {
         VkResult result;
 
-        VkPipeline pipeline;
+        VkPipeline pipeline = VK_NULL_HANDLE;
 
         VkPipelineShaderStageCreateInfo shaderStageCreateInfoVert;
         shaderStageCreateInfoVert.sType               = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -174,6 +174,8 @@ namespace vkBasalt
         pipelineCreateInfo.basePipelineIndex   = -1;
 
         result = pLogicalDevice->vkd.CreateGraphicsPipelines(pLogicalDevice->device, VK_NULL_HANDLE, 1, &pipelineCreateInfo, nullptr, &pipeline);
+        if (result != VK_SUCCESS && checkedConstruction && pipeline != VK_NULL_HANDLE)
+            pLogicalDevice->vkd.DestroyPipeline(pLogicalDevice->device, pipeline, nullptr);
         ASSERT_VULKAN(result);
 
         return pipeline;

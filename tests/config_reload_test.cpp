@@ -75,6 +75,11 @@ int main()
     assert(config.reloadIfChanged());
     assert(!config.effectOptionsChanged(structuralSnapshot));
 
+    vkBasalt::Config reloadSnapshot(config);
+    writeConfigAtomically(configPath, "effects = makoVibrance:cas\nmakoReloadGeneration = 1\n");
+    assert(config.reloadIfChanged());
+    assert(config.effectOptionsChanged(reloadSnapshot));
+    assert(config.getOption<std::vector<std::string>>("effects") == reloadSnapshot.getOption<std::vector<std::string>>("effects"));
     std::filesystem::remove_all(directory);
     return 0;
 }

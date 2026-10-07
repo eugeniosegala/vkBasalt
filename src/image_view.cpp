@@ -10,6 +10,10 @@ namespace vkBasalt
                                               uint32_t             mipLevels)
     {
         std::vector<VkImageView> imageViews(images.size());
+        ScopeExit rollback([&] {
+            for (auto handle : imageViews) if (handle != VK_NULL_HANDLE)
+                pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, handle, nullptr);
+        });
 
         VkImageViewCreateInfo imageViewCreateInfo;
 
@@ -37,6 +41,7 @@ namespace vkBasalt
             ASSERT_VULKAN(result);
         }
 
+        rollback.release();
         return imageViews;
     }
 

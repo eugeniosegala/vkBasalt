@@ -43,3 +43,15 @@ descriptor_set_test = executable(
     include_directories: include_directories('../src'),
 )
 test('sampler-free shader descriptors', descriptor_set_test)
+
+dds_test = executable('dds_test', 'dds_test.cpp', '../src/stb_image.c', include_directories: include_directories('../src'))
+test('bounded DDS textures', dds_test)
+
+vulkan_construction_test = executable(
+    'vulkan_construction_test', 'vulkan_construction_test.cpp',
+    objects: vkBasalt_library.extract_all_objects(recursive: false),
+    link_with: keyboard_input_x11_lib,
+    dependencies: [x11_dep, reshade_dep],
+    include_directories: include_directories('../src'),
+)
+test('transactional Vulkan construction', vulkan_construction_test)

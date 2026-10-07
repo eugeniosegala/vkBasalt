@@ -15,6 +15,14 @@ namespace vkBasalt
                                       uint32_t              mipLevels)
     {
         std::vector<VkImage> images(count);
+        imageMemory = VK_NULL_HANDLE;
+        ScopeExit rollback([&] {
+            for (auto image : images) if (image != VK_NULL_HANDLE)
+                pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, image, nullptr);
+            if (imageMemory != VK_NULL_HANDLE)
+                pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, imageMemory, nullptr);
+            imageMemory = VK_NULL_HANDLE;
+        });
 
         VkFormat srgbFormat  = isSRGB(format) ? format : convertToSRGB(format);
         VkFormat unormFormat = isSRGB(format) ? convertToUNORM(format) : format;
@@ -80,6 +88,7 @@ namespace vkBasalt
             result = pLogicalDevice->vkd.BindImageMemory(pLogicalDevice->device, images[i], imageMemory, memoryRequirements.size * i);
             ASSERT_VULKAN(result);
         }
+        rollback.release();
         return images;
     }
 
@@ -87,9 +96,28 @@ namespace vkBasalt
     uploadToImage(LogicalDevice* pLogicalDevice, VkImage image, VkExtent3D extent, uint32_t size, const unsigned char* writeData, uint32_t mipLevels)
     {
 
-        VkBuffer       stagingBuffer;
-        VkDeviceMemory stagingMemory;
+        VkBuffer       stagingBuffer = VK_NULL_HANDLE;
+        VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
 
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        bool submitted = false;
+        pLogicalDevice->pendingUploads.reserve(pLogicalDevice->pendingUploads.size() + 1);
+        ScopeExit cleanup([&] {
+            // VkQueueWaitIdle/submit failure can mean device loss. Drain any
+            // accepted work before releasing upload resources on unwind.
+            if (submitted) {
+                const auto idle = pLogicalDevice->vkd.DeviceWaitIdle(pLogicalDevice->device);
+                if (idle != VK_SUCCESS && idle != VK_ERROR_DEVICE_LOST) {
+                    pLogicalDevice->uploadQueueUncertain = true;
+                    pLogicalDevice->pendingUploads.push_back({commandBuffer, stagingBuffer, stagingMemory});
+                    return;
+                }
+            }
+            if (commandBuffer != VK_NULL_HANDLE)
+                pLogicalDevice->vkd.FreeCommandBuffers(pLogicalDevice->device, pLogicalDevice->commandPool, 1, &commandBuffer);
+            pLogicalDevice->vkd.DestroyBuffer(pLogicalDevice->device, stagingBuffer, nullptr);
+            pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, stagingMemory, nullptr);
+        });
         createBuffer(pLogicalDevice,
                      size,
                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -109,8 +137,7 @@ namespace vkBasalt
         allocInfo.commandPool        = pLogicalDevice->commandPool;
         allocInfo.commandBufferCount = 1;
 
-        VkCommandBuffer commandBuffer;
-        pLogicalDevice->vkd.AllocateCommandBuffers(pLogicalDevice->device, &allocInfo, &commandBuffer);
+        ASSERT_VULKAN(pLogicalDevice->vkd.AllocateCommandBuffers(pLogicalDevice->device, &allocInfo, &commandBuffer));
         // initialize dispatch table for commandBuffer since it is a dispatchable object
         initializeDispatchTable(commandBuffer, pLogicalDevice->device);
 
@@ -119,7 +146,7 @@ namespace vkBasalt
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-        pLogicalDevice->vkd.BeginCommandBuffer(commandBuffer, &beginInfo);
+        ASSERT_VULKAN(pLogicalDevice->vkd.BeginCommandBuffer(commandBuffer, &beginInfo));
 
         VkImageMemoryBarrier memoryBarrier;
         memoryBarrier.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -163,7 +190,7 @@ namespace vkBasalt
 
         generateMipMaps(pLogicalDevice, commandBuffer, image, extent, mipLevels);
 
-        pLogicalDevice->vkd.EndCommandBuffer(commandBuffer);
+        ASSERT_VULKAN(pLogicalDevice->vkd.EndCommandBuffer(commandBuffer));
 
         VkSubmitInfo submitInfo = {};
 
@@ -171,12 +198,12 @@ namespace vkBasalt
         submitInfo.commandBufferCount = 1;
         submitInfo.pCommandBuffers    = &commandBuffer;
 
-        pLogicalDevice->vkd.QueueSubmit(pLogicalDevice->queue, 1, &submitInfo, VK_NULL_HANDLE);
-        pLogicalDevice->vkd.QueueWaitIdle(pLogicalDevice->queue);
+        const auto submitResult = pLogicalDevice->vkd.QueueSubmit(pLogicalDevice->queue, 1, &submitInfo, VK_NULL_HANDLE);
+        submitted = submitResult == VK_SUCCESS;
+        ASSERT_VULKAN(submitResult);
+        ASSERT_VULKAN(pLogicalDevice->vkd.QueueWaitIdle(pLogicalDevice->queue));
 
-        pLogicalDevice->vkd.FreeCommandBuffers(pLogicalDevice->device, pLogicalDevice->commandPool, 1, &commandBuffer);
-        pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, stagingMemory, nullptr);
-        pLogicalDevice->vkd.DestroyBuffer(pLogicalDevice->device, stagingBuffer, nullptr);
+        submitted = false;
     }
 
     void changeImageLayout(LogicalDevice* pLogicalDevice, std::vector<VkImage> images, uint32_t mipLevels)
@@ -188,8 +215,22 @@ namespace vkBasalt
         allocInfo.commandPool        = pLogicalDevice->commandPool;
         allocInfo.commandBufferCount = 1;
 
-        VkCommandBuffer commandBuffer;
-        pLogicalDevice->vkd.AllocateCommandBuffers(pLogicalDevice->device, &allocInfo, &commandBuffer);
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        bool submitted = false;
+        pLogicalDevice->pendingUploads.reserve(pLogicalDevice->pendingUploads.size() + 1);
+        ScopeExit cleanup([&] {
+            if (submitted) {
+                const auto idle = pLogicalDevice->vkd.DeviceWaitIdle(pLogicalDevice->device);
+                if (idle != VK_SUCCESS && idle != VK_ERROR_DEVICE_LOST) {
+                    pLogicalDevice->uploadQueueUncertain = true;
+                    pLogicalDevice->pendingUploads.push_back({commandBuffer, VK_NULL_HANDLE, VK_NULL_HANDLE});
+                    return;
+                }
+            }
+            if (commandBuffer != VK_NULL_HANDLE)
+                pLogicalDevice->vkd.FreeCommandBuffers(pLogicalDevice->device, pLogicalDevice->commandPool, 1, &commandBuffer);
+        });
+        ASSERT_VULKAN(pLogicalDevice->vkd.AllocateCommandBuffers(pLogicalDevice->device, &allocInfo, &commandBuffer));
         // initialize dispatch table for commandBuffer since it is a dispatchable object
         initializeDispatchTable(commandBuffer, pLogicalDevice->device);
 
@@ -198,7 +239,7 @@ namespace vkBasalt
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-        pLogicalDevice->vkd.BeginCommandBuffer(commandBuffer, &beginInfo);
+        ASSERT_VULKAN(pLogicalDevice->vkd.BeginCommandBuffer(commandBuffer, &beginInfo));
 
         VkImageMemoryBarrier memoryBarrier;
         memoryBarrier.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -223,17 +264,19 @@ namespace vkBasalt
                 commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &memoryBarrier);
         }
 
-        pLogicalDevice->vkd.EndCommandBuffer(commandBuffer);
+        ASSERT_VULKAN(pLogicalDevice->vkd.EndCommandBuffer(commandBuffer));
 
         VkSubmitInfo submitInfo       = {};
         submitInfo.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submitInfo.commandBufferCount = 1;
         submitInfo.pCommandBuffers    = &commandBuffer;
 
-        pLogicalDevice->vkd.QueueSubmit(pLogicalDevice->queue, 1, &submitInfo, VK_NULL_HANDLE);
-        pLogicalDevice->vkd.QueueWaitIdle(pLogicalDevice->queue);
+        const auto submitResult = pLogicalDevice->vkd.QueueSubmit(pLogicalDevice->queue, 1, &submitInfo, VK_NULL_HANDLE);
+        submitted = submitResult == VK_SUCCESS;
+        ASSERT_VULKAN(submitResult);
+        ASSERT_VULKAN(pLogicalDevice->vkd.QueueWaitIdle(pLogicalDevice->queue));
 
-        pLogicalDevice->vkd.FreeCommandBuffers(pLogicalDevice->device, pLogicalDevice->commandPool, 1, &commandBuffer);
+        submitted = false;
     }
 
     void generateMipMaps(LogicalDevice* pLogicalDevice, VkCommandBuffer commandBuffer, VkImage image, VkExtent3D extent, uint32_t mipLevels)

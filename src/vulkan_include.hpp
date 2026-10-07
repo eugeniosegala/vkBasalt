@@ -8,15 +8,44 @@
 #include "vulkan/vk_layer.h"
 
 #include <string>
+#include <stdexcept>
+#include <utility>
 
 #include "logger.hpp"
 
-#ifndef ASSERT_VULKAN
-#define ASSERT_VULKAN(val) \
-    if (val != VK_SUCCESS) \
-    { \
-        Logger::err("ASSERT_VULKAN failed in " + std::string(__FILE__) + " : " + std::to_string(__LINE__) + "; " + std::to_string(val)); \
+namespace vkBasalt
+{
+    // Fail closed only inside candidate construction. Other layer entry points
+    // retain their existing VkResult handling; exceptions never cross the ABI.
+    inline thread_local bool checkedConstruction = false;
+    struct CheckedConstruction
+    {
+        bool previous = checkedConstruction;
+        CheckedConstruction() { checkedConstruction = true; }
+        ~CheckedConstruction() { checkedConstruction = previous; }
+    };
+    template<typename F> struct ScopeExit
+    {
+        F cleanup;
+        bool active = true;
+        explicit ScopeExit(F fn) : cleanup(std::move(fn)) {}
+        ~ScopeExit() { if (active) cleanup(); }
+        void release() { active = false; }
+    };
+    struct VulkanError : std::runtime_error {
+        VkResult result;
+        VulkanError(VkResult value, const std::string& message) : std::runtime_error(message), result(value) {}
+    };
+    inline void checkVulkan(VkResult result, const char* file, int line)
+    {
+        if (result == VK_SUCCESS) return;
+        const auto message = "ASSERT_VULKAN failed in " + std::string(file) + " : " + std::to_string(line) + "; " + std::to_string(result);
+        Logger::err(message);
+        if (checkedConstruction) throw VulkanError(result, message);
     }
+}
+#ifndef ASSERT_VULKAN
+#define ASSERT_VULKAN(val) vkBasalt::checkVulkan((val), __FILE__, __LINE__);
 #endif
 namespace vkBasalt
 {

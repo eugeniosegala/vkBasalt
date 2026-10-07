@@ -113,6 +113,10 @@ namespace vkBasalt
     std::vector<VkSemaphore> createSemaphores(LogicalDevice* pLogicalDevice, uint32_t count)
     {
         std::vector<VkSemaphore> semaphores(count);
+        ScopeExit rollback([&] {
+            for (auto semaphore : semaphores) if (semaphore != VK_NULL_HANDLE)
+                pLogicalDevice->vkd.DestroySemaphore(pLogicalDevice->device, semaphore, nullptr);
+        });
         VkSemaphoreCreateInfo    info;
         info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
         info.pNext = nullptr;
@@ -120,8 +124,9 @@ namespace vkBasalt
 
         for (uint32_t i = 0; i < count; i++)
         {
-            pLogicalDevice->vkd.CreateSemaphore(pLogicalDevice->device, &info, nullptr, &semaphores[i]);
+            ASSERT_VULKAN(pLogicalDevice->vkd.CreateSemaphore(pLogicalDevice->device, &info, nullptr, &semaphores[i]));
         }
+        rollback.release();
         return semaphores;
     }
 

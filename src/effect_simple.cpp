@@ -215,6 +215,7 @@ namespace vkBasalt
 
     SimpleEffect::~SimpleEffect()
     {
+        if (pLogicalDevice->destroyed) return;
         Logger::debug("destroying SimpleEffect " + convertToString(this));
         pLogicalDevice->vkd.DestroyPipeline(pLogicalDevice->device, graphicsPipeline, nullptr);
         pLogicalDevice->vkd.DestroyPipelineLayout(pLogicalDevice->device, pipelineLayout, nullptr);
@@ -228,16 +229,14 @@ namespace vkBasalt
         pLogicalDevice->vkd.DestroyDescriptorPool(pLogicalDevice->device, descriptorPool, nullptr);
         for (uint32_t i = 0; i < dynamicUniformBuffers.size(); i++)
         {
-            pLogicalDevice->vkd.UnmapMemory(pLogicalDevice->device, dynamicUniformMemories[i]);
+            if (dynamicUniformMappings[i])
+                pLogicalDevice->vkd.UnmapMemory(pLogicalDevice->device, dynamicUniformMemories[i]);
             pLogicalDevice->vkd.DestroyBuffer(pLogicalDevice->device, dynamicUniformBuffers[i], nullptr);
             pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, dynamicUniformMemories[i], nullptr);
         }
-        for (unsigned int i = 0; i < framebuffers.size(); i++)
-        {
-            pLogicalDevice->vkd.DestroyFramebuffer(pLogicalDevice->device, framebuffers[i], nullptr);
-            pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, inputImageViews[i], nullptr);
-            pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, outputImageViews[i], nullptr);
-        }
+        for (auto handle : framebuffers) pLogicalDevice->vkd.DestroyFramebuffer(pLogicalDevice->device, handle, nullptr);
+        for (auto handle : inputImageViews) pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, handle, nullptr);
+        for (auto handle : outputImageViews) pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, handle, nullptr);
         Logger::debug("after DestroyImageView");
         pLogicalDevice->vkd.DestroySampler(pLogicalDevice->device, sampler, nullptr);
     }

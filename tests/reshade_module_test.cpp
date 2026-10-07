@@ -61,5 +61,8 @@ technique Tone { pass { VertexShader = VS; PixelShader = PS; } }
     const auto texturedModule = vkBasalt::compileReshadeModule(texturedConfig, "CustomTone", {1280, 720}, false);
     assert(texturedModule.textures.size() == 1);
     assert(texturedModule.textures.begin()->second.pixels.size() == 4);
+    std::ofstream(shader) << std::string(textured).replace(textured.find("Width = 1"), 9, "Width = 65536");
+    try { vkBasalt::compileReshadeModule(texturedConfig, "CustomTone", {1280,720}, false); assert(false); }
+    catch (const std::runtime_error&) {}
     std::filesystem::remove_all(directory);
 }

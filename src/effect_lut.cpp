@@ -26,6 +26,18 @@ namespace vkBasalt
                          std::vector<VkImage> outputImages,
                          Config*              pConfig)
     {
+        this->pLogicalDevice = pLogicalDevice;
+        auto rescue = std::shared_ptr<LutEffect>(new LutEffect);
+        rescue->pLogicalDevice = pLogicalDevice;
+        pLogicalDevice->pendingUploadEffects.reserve(pLogicalDevice->pendingUploadEffects.size() + 1);
+        ScopeExit rollback([&] {
+            if (pLogicalDevice->uploadQueueUncertain) {
+                *rescue = std::move(*this);
+                pLogicalDevice->pendingUploadEffects.push_back(std::move(rescue));
+            } else {
+                destroyResources();
+            }
+        });
         vertexCode   = full_screen_triangle_vert;
         fragmentCode = lut_frag;
 
@@ -107,9 +119,13 @@ namespace vkBasalt
                                                        lutDescriptorSetLayout,
                                                        {sampler},
                                                        std::vector<std::vector<VkImageView>>(1, std::vector<VkImageView>(1, lutImageView)))[0];
-    }
-    LutEffect::~LutEffect()
+            rollback.release();
+}
+    LutEffect::~LutEffect() { destroyResources(); }
+
+    void LutEffect::destroyResources()
     {
+        if (pLogicalDevice->destroyed) return;
         pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, lutImageView, nullptr);
         pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, lutImage, nullptr);
         pLogicalDevice->vkd.DestroyDescriptorSetLayout(pLogicalDevice->device, lutDescriptorSetLayout, nullptr);

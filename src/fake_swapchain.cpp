@@ -10,6 +10,14 @@ namespace vkBasalt
                                                    VkDeviceMemory&          deviceMemory)
     {
         std::vector<VkImage> fakeImages(count);
+        deviceMemory = VK_NULL_HANDLE;
+        ScopeExit rollback([&] {
+            for (auto image : fakeImages) if (image != VK_NULL_HANDLE)
+                pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, image, nullptr);
+            if (deviceMemory != VK_NULL_HANDLE)
+                pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, deviceMemory, nullptr);
+            deviceMemory = VK_NULL_HANDLE;
+        });
 
         VkFormat srgbFormat =
             isSRGB(swapchainCreateInfo.imageFormat) ? swapchainCreateInfo.imageFormat : convertToSRGB(swapchainCreateInfo.imageFormat);
@@ -78,6 +86,7 @@ namespace vkBasalt
             result = pLogicalDevice->vkd.BindImageMemory(pLogicalDevice->device, fakeImages[i], deviceMemory, memoryRequirements.size * i);
             ASSERT_VULKAN(result);
         }
+        rollback.release();
         return fakeImages;
     }
 } // namespace vkBasalt

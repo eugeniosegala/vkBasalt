@@ -6,6 +6,10 @@ namespace vkBasalt
     createFramebuffers(LogicalDevice* pLogicalDevice, VkRenderPass renderPass, VkExtent2D& extent, std::vector<std::vector<VkImageView>> imageViews)
     {
         std::vector<VkFramebuffer> framebuffers(imageViews[0].size());
+        ScopeExit rollback([&] {
+            for (auto handle : framebuffers) if (handle != VK_NULL_HANDLE)
+                pLogicalDevice->vkd.DestroyFramebuffer(pLogicalDevice->device, handle, nullptr);
+        });
         std::vector<VkImageView>   perFrameImageViews;
         for (uint32_t i = 0; i < imageViews[0].size(); i++)
         {
@@ -29,6 +33,7 @@ namespace vkBasalt
             ASSERT_VULKAN(result);
             perFrameImageViews.clear();
         }
+        rollback.release();
         return framebuffers;
     }
 } // namespace vkBasalt

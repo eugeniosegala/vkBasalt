@@ -65,6 +65,7 @@
     FORVKFUNC(MapMemory) \
     FORVKFUNC(QueuePresentKHR) \
     FORVKFUNC(QueueSubmit) \
+    FORVKFUNC(DeviceWaitIdle) \
     FORVKFUNC(QueueWaitIdle) \
     FORVKFUNC(UnmapMemory) \
     FORVKFUNC(UpdateDescriptorSets)

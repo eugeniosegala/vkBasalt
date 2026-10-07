@@ -70,6 +70,10 @@ namespace vkBasalt
                 desiredChannels = 1;
             else if (texture.format != reshadefx::texture_format::rg8 && texture.format != reshadefx::texture_format::rgba8)
                 throw std::runtime_error("unsupported source texture format: " + texture.unique_name);
+            constexpr size_t maxTextureBytes = 256u * 1024u * 1024u;
+            if (texture.width == 0 || texture.height == 0 || texture.width > 16384 || texture.height > 16384 ||
+                static_cast<uint64_t>(texture.width) * texture.height * desiredChannels > maxTextureBytes)
+                throw std::runtime_error("source texture exceeds supported bounds: " + texture.unique_name);
             const auto path = config.getOption<std::string>("reshadeTexturePath") + "/" + source->value.string_data;
             const auto closeFile = [](FILE* file) { fclose(file); };
             std::unique_ptr<FILE, decltype(closeFile)> file(fopen(path.c_str(), "rb"), closeFile);
@@ -77,8 +81,13 @@ namespace vkBasalt
                 throw std::runtime_error("failed to load texture: " + path);
             ReshadeTexture loaded;
             int channels = 0;
+            const bool dds = stbi_dds_test_file(file.get());
+            if (!dds && (!stbi_info_from_file(file.get(), &loaded.width, &loaded.height, &channels) ||
+                loaded.width <= 0 || loaded.height <= 0 || channels < 1 || channels > 4 || loaded.width > 16384 || loaded.height > 16384 ||
+                static_cast<uint64_t>(loaded.width) * loaded.height * std::max(channels, desiredChannels) > maxTextureBytes))
+                throw std::runtime_error("invalid or oversized source texture: " + path);
             std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> pixels(
-                stbi_dds_test_file(file.get())
+                dds
                     ? stbi_dds_load_from_file(file.get(), &loaded.width, &loaded.height, &channels, desiredChannels)
                     : stbi_load_from_file(file.get(), &loaded.width, &loaded.height, &channels, desiredChannels),
                 stbi_image_free);

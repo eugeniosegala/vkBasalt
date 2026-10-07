@@ -37,6 +37,18 @@ namespace vkBasalt
                                  std::string          effectName,
                                  PreparedReshadeModule compiledModule)
     {
+        this->pLogicalDevice = pLogicalDevice;
+        auto rescue = std::shared_ptr<ReshadeEffect>(new ReshadeEffect);
+        rescue->pLogicalDevice = pLogicalDevice;
+        pLogicalDevice->pendingUploadEffects.reserve(pLogicalDevice->pendingUploadEffects.size() + 1);
+        ScopeExit rollback([&] {
+            if (pLogicalDevice->uploadQueueUncertain) {
+                *rescue = std::move(*this);
+                pLogicalDevice->pendingUploadEffects.push_back(std::move(rescue));
+            } else {
+                destroyResources();
+            }
+        });
         Logger::debug("in creating ReshadeEffect");
 
         this->pLogicalDevice   = pLogicalDevice;
@@ -163,6 +175,7 @@ namespace vkBasalt
                                                               VK_IMAGE_ASPECT_COLOR_BIT,
                                                               module.textures[i].levels)[0]);
 
+                textureImageViewsUNORM[module.textures[i].unique_name] = imageViewsUNORM;
                 std::vector<VkImageView> imageViewsSRGB =
                     std::vector<VkImageView>(inputImages.size(),
                                              createImageViews(pLogicalDevice,
@@ -221,6 +234,7 @@ namespace vkBasalt
 
                 std::vector<VkImageView> imageViewsUNORM = std::vector<VkImageView>(inputImages.size(), imageViews[0]);
 
+                textureImageViewsUNORM[module.textures[i].unique_name] = imageViewsUNORM;
                 imageViews = createImageViews(pLogicalDevice,
                                               convertToSRGB(convertReshadeFormat(module.textures[i].format)),
                                               images,
@@ -523,7 +537,7 @@ namespace vkBasalt
             renderPassCreateInfo.dependencyCount = 1;
             renderPassCreateInfo.pDependencies   = &subpassDependency;
 
-            VkRenderPass renderPass;
+            VkRenderPass renderPass = VK_NULL_HANDLE;
             VkResult     result = pLogicalDevice->vkd.CreateRenderPass(pLogicalDevice->device, &renderPassCreateInfo, nullptr, &renderPass);
             ASSERT_VULKAN(result);
             renderPasses.push_back(renderPass);
@@ -764,16 +778,16 @@ namespace vkBasalt
             pipelineCreateInfo.basePipelineHandle  = VK_NULL_HANDLE;
             pipelineCreateInfo.basePipelineIndex   = -1;
 
-            VkPipeline pipeline;
+            VkPipeline pipeline = VK_NULL_HANDLE;
             result = pLogicalDevice->vkd.CreateGraphicsPipelines(pLogicalDevice->device, VK_NULL_HANDLE, 1, &pipelineCreateInfo, nullptr, &pipeline);
-            ASSERT_VULKAN(result);
-
             graphicsPipelines.push_back(pipeline);
+            ASSERT_VULKAN(result);
 
             Logger::debug("vertex   entry: " + pass.vs_entry_point);
             Logger::debug("fragment entry: " + pass.ps_entry_point);
         }
         Logger::debug("finished creating Reshade effect");
+        rollback.release();
     }
 
     void ReshadeEffect::updateEffect(uint32_t imageIndex)
@@ -1003,8 +1017,11 @@ namespace vkBasalt
         Logger::debug("after the second pipeline barrier");
     }
 
-    ReshadeEffect::~ReshadeEffect()
+    ReshadeEffect::~ReshadeEffect() { destroyResources(); }
+
+    void ReshadeEffect::destroyResources()
     {
+        if (pLogicalDevice->destroyed) return;
         Logger::debug("destroying ReshadeEffect" + convertToString(this));
         for (auto& pipeline : graphicsPipelines)
         {
@@ -1015,8 +1032,8 @@ namespace vkBasalt
         {
             if (stagingBufferMapping)
                 pLogicalDevice->vkd.UnmapMemory(pLogicalDevice->device, stagingBufferMemory);
-            pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, stagingBufferMemory, nullptr);
             pLogicalDevice->vkd.DestroyBuffer(pLogicalDevice->device, stagingBuffer, nullptr);
+            pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, stagingBufferMemory, nullptr);
         }
 
         pLogicalDevice->vkd.DestroyPipelineLayout(pLogicalDevice->device, pipelineLayout, nullptr);
@@ -1031,6 +1048,14 @@ namespace vkBasalt
         pLogicalDevice->vkd.DestroyShaderModule(pLogicalDevice->device, shaderModule, nullptr);
 
         pLogicalDevice->vkd.DestroyDescriptorPool(pLogicalDevice->device, descriptorPool, nullptr);
+        for (auto& fbs : framebuffers)
+        {
+            for (auto& fb : fbs)
+            {
+                pLogicalDevice->vkd.DestroyFramebuffer(pLogicalDevice->device, fb, nullptr);
+            }
+        }
+
         for (auto& imageView : outputImageViewsSRGB)
         {
             pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, imageView, nullptr);
@@ -1049,15 +1074,9 @@ namespace vkBasalt
             pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, imageView, nullptr);
         }
 
-        for (auto& fbs : framebuffers)
-        {
-            for (auto& fb : fbs)
-            {
-                pLogicalDevice->vkd.DestroyFramebuffer(pLogicalDevice->device, fb, nullptr);
-            }
-        }
-
         std::set<VkImageView> imageViewSet;
+        imageViewSet.insert(inputImageViewsSRGB.begin(), inputImageViewsSRGB.end());
+        imageViewSet.insert(inputImageViewsUNORM.begin(), inputImageViewsUNORM.end());
 
         for (auto& it : textureImageViewsSRGB)
         {
