@@ -12,6 +12,7 @@
 #include <set>
 #include <tuple>
 #include <type_traits>
+#include <cstdint>
 
 namespace vkBasalt
 {
@@ -24,19 +25,37 @@ namespace vkBasalt
 } // namespace vkBasalt
 namespace
 {
-    size_t              calls = 0, failAt = 0, nextHandle = 1;
-    std::set<uintptr_t> live;
-    uintptr_t           commandSlots[64]{};
-    size_t              commandSlot    = 0;
-    VkResult            drainResult    = VK_SUCCESS;
-    uintptr_t           deviceDispatch = 0;
-    unsigned char       mapping[4096]{};
+    size_t             calls = 0, failAt = 0, nextHandle = 1;
+    std::set<uint64_t> live;
+    uintptr_t          commandSlots[64]{};
+    size_t             commandSlot    = 0;
+    VkResult           drainResult    = VK_SUCCESS;
+    uintptr_t          deviceDispatch = 0;
+    unsigned char      mapping[4096]{};
+    // Vulkan uses pointers for non-dispatchable handles on 64-bit and uint64_t
+    // on 32-bit. Keep the fault tracker independent of that representation.
+    template<typename T>
+    T handleFromValue(uintptr_t value)
+    {
+        if constexpr (std::is_pointer_v<T>)
+            return reinterpret_cast<T>(value);
+        else
+            return static_cast<T>(value);
+    }
+    template<typename T>
+    uint64_t handleKey(T handle)
+    {
+        if constexpr (std::is_pointer_v<T>)
+            return reinterpret_cast<uintptr_t>(handle);
+        else
+            return static_cast<uint64_t>(handle);
+    }
     template<typename T>
     T allocate()
     {
         auto value = nextHandle++;
         live.insert(value);
-        return reinterpret_cast<T>(value);
+        return handleFromValue<T>(value);
     }
     template<typename F>
     struct Mock;
@@ -60,7 +79,7 @@ namespace
             auto handle = std::get<1>(std::tuple(args...));
             if (handle)
             {
-                const auto removed = live.erase(reinterpret_cast<uintptr_t>(handle));
+                const auto removed = live.erase(handleKey(handle));
                 assert(removed == 1); // catches duplicate destruction and foreign handles
             }
         }
@@ -148,7 +167,7 @@ namespace
                 return VK_ERROR_OUT_OF_DEVICE_MEMORY;
             // Sets are owned by their pool and do not require independent freeing.
             for (uint32_t i = 0; i < info->descriptorSetCount; ++i)
-                sets[i] = reinterpret_cast<VkDescriptorSet>(1);
+                sets[i] = handleFromValue<VkDescriptorSet>(1);
             return VK_SUCCESS;
         };
         d.vkd.AllocateCommandBuffers = +[](VkDevice, const VkCommandBufferAllocateInfo* info, VkCommandBuffer* buffers) {
@@ -318,7 +337,7 @@ technique Tone { pass { VertexShader = VS; PixelShader = PS; } }
         swapchain->swapchainCreateInfo.imageFormat      = swapchain->format;
         swapchain->swapchainCreateInfo.imageExtent      = swapchain->imageExtent;
         swapchain->swapchainCreateInfo.imageArrayLayers = 1;
-        const auto handle                               = reinterpret_cast<VkSwapchainKHR>(1);
+        const auto handle                               = handleFromValue<VkSwapchainKHR>(1);
         vkBasalt::swapchainMap[handle]                  = swapchain;
         uint32_t   count                                = 2;
         VkImage    images[2]{};

@@ -68,6 +68,7 @@ meson setup "$build64" "$repo_root" \
     --libdir=lib \
     -Dwith_json=false
 meson compile -C "$build64"
+meson test -C "$build64" --print-errorlogs
 DESTDIR="$stage64" meson install -C "$build64"
 
 ASFLAGS=--32 CFLAGS=-m32 CXXFLAGS=-m32 LDFLAGS=-m32 \
@@ -78,6 +79,7 @@ meson setup "$build32" "$repo_root" \
     --libdir=lib32 \
     -Dwith_json=false
 meson compile -C "$build32"
+meson test -C "$build32" --print-errorlogs
 DESTDIR="$stage32" meson install -C "$build32"
 
 install -Dm755 "$stage64/usr/lib/libvkbasalt.so" \
