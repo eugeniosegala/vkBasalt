@@ -55,3 +55,14 @@ vulkan_construction_test = executable(
     include_directories: include_directories('../src'),
 )
 test('transactional Vulkan construction', vulkan_construction_test)
+
+layer_interface_test = executable(
+    'layer_interface_test', 'layer_interface_test.cpp',
+    objects: vkBasalt_library.extract_all_objects(recursive: false),
+    link_with: keyboard_input_x11_lib,
+    dependencies: [x11_dep, reshade_dep],
+    include_directories: [include_directories('../src'), vkBasalt_include_path],
+)
+test('Vulkan layer version and forwarding', layer_interface_test,
+     args: [join_paths(meson.project_build_root(), 'packaging/vkBasalt.x86_64.json'),
+            join_paths(meson.project_build_root(), 'packaging/vkBasalt.x86.json')])

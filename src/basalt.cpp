@@ -1,3 +1,4 @@
+#include "vulkan_version.hpp"
 #include "vulkan_include.hpp"
 
 #include <mutex>
@@ -397,6 +398,10 @@ namespace vkBasalt
 
         modifiedCreateInfo.pApplicationInfo = &appInfo;
         VkResult ret                        = createFunc(&modifiedCreateInfo, pAllocator, pInstance);
+
+        // Failed creation has no valid dispatchable instance to inspect.
+        if (ret != VK_SUCCESS)
+            return ret;
 
         // fetch our own dispatch table for the functions we need, into the next layer
         InstanceDispatch dispatchTable;
@@ -948,7 +953,7 @@ namespace vkBasalt
             std::strcpy(pProperties->layerName, VKBASALT_NAME);
             std::strcpy(pProperties->description, "a post processing layer");
             pProperties->implementationVersion = 1;
-            pProperties->specVersion           = VK_MAKE_VERSION(1, 2, 0);
+            pProperties->specVersion           = VKBASALT_API_VERSION;
         }
 
         return VK_SUCCESS;

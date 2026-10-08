@@ -63,6 +63,12 @@ ASFLAGS=--32 CFLAGS=-m32 CXXFLAGS=-m32 PKG_CONFIG_PATH=/usr/lib32/pkgconfig meso
 ninja -C builddir.32 install
 ```
 
+## MAKO Vulkan baseline and release validation
+
+`vulkan-headers-revision.txt` pins Vulkan Headers to `v1.4.365`, aligned with MAKO Renderer's `engine/vulkan-headers-revision.txt`. The release packager fetches that immutable tag and passes its include directory explicitly to both architectures. Direct Meson builds require headers 1.4.365 or newer and can select them with `-Dvulkan_headers=/path/to/Vulkan-Headers/include`. The reviewed API declaration lives in `meson.build`; Meson generates all manifests and the runtime declaration from it. Header upgrades require a separate review of API support before changing that declaration.
+
+Run `scripts/package-mako-release.sh mako-v0.3.2.10-N /tmp/vkBasalt-candidate.tar.xz` to compile and test both architectures without installing or publishing. The archive records the exact Vulkan header tag, resolved commit, and declared API in `share/doc/vkbasalt/SOURCE`. Tests cover Vulkan 1.4 forwarding and failed instance creation as well as live effects and resource rollback. A new `mako-v*` tag triggers `.github/workflows/release-mako.yml`, which runs that same tested packager and publishes an immutable attested archive. MAKO must verify the downloaded public asset before updating its dependency pin and generated Flatpak module.
+
 ## Packaging status
 
 [Debian](https://tracker.debian.org/pkg/vkbasalt) `sudo apt install vkbasalt`

@@ -10,7 +10,7 @@ if [[ ! "$release_tag" =~ ^mako-v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$ ]]; then
     exit 2
 fi
 
-for command in git meson ninja glslangValidator pkg-config readelf strip tar sha256sum xz; do
+for command in git python3 meson ninja glslangValidator pkg-config readelf strip tar sha256sum xz; do
     if ! command -v "$command" >/dev/null 2>&1; then
         echo "Required command not found: $command" >&2
         exit 1
@@ -54,6 +54,17 @@ resolve_pkg_config32() {
     exit 1
 }
 
+vulkan_headers_revision="$(tr -d '[:space:]' < "$repo_root/vulkan-headers-revision.txt")"
+if [[ ! "$vulkan_headers_revision" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "vulkan-headers-revision.txt must contain an immutable Vulkan-Headers tag" >&2
+    exit 1
+fi
+git clone --quiet --depth=1 --branch "$vulkan_headers_revision" \
+    https://github.com/KhronosGroup/Vulkan-Headers "$work_root/vulkan-headers"
+vulkan_headers_commit="$(git -C "$work_root/vulkan-headers" rev-parse HEAD)"
+vulkan_headers_include="$work_root/vulkan-headers/include"
+echo "Vulkan-Headers $vulkan_headers_revision ($vulkan_headers_commit)"
+
 pkg_config32="$(resolve_pkg_config32)"
 pkg_config32_libdir="$pkg_config32:/usr/share/pkgconfig"
 resolved_x11_libdir="$(PKG_CONFIG_LIBDIR="$pkg_config32_libdir" pkg-config --variable=libdir x11)"
@@ -66,7 +77,8 @@ meson setup "$build64" "$repo_root" \
     --buildtype=release \
     --prefix=/usr \
     --libdir=lib \
-    -Dwith_json=false
+    -Dwith_json=false \
+    -Dvulkan_headers="$vulkan_headers_include"
 meson compile -C "$build64"
 meson test -C "$build64" --print-errorlogs
 DESTDIR="$stage64" meson install -C "$build64"
@@ -77,7 +89,8 @@ meson setup "$build32" "$repo_root" \
     --buildtype=release \
     --prefix=/usr \
     --libdir=lib32 \
-    -Dwith_json=false
+    -Dwith_json=false \
+    -Dvulkan_headers="$vulkan_headers_include"
 meson compile -C "$build32"
 meson test -C "$build32" --print-errorlogs
 DESTDIR="$stage32" meson install -C "$build32"
@@ -89,14 +102,16 @@ install -Dm755 "$stage32/usr/lib32/libvkbasalt.so" \
 strip --strip-unneeded "$payload/lib/libvkbasalt.so"
 strip --strip-unneeded "$payload/lib32/libvkbasalt.so"
 
-install -Dm644 "$repo_root/packaging/vkBasalt.x86_64.json" \
+install -Dm644 "$build64/packaging/vkBasalt.x86_64.json" \
     "$payload/share/vulkan/implicit_layer.d/vkBasalt.x86_64.json"
-install -Dm644 "$repo_root/packaging/vkBasalt.x86.json" \
+install -Dm644 "$build32/packaging/vkBasalt.x86.json" \
     "$payload/share/vulkan/implicit_layer.d/vkBasalt.x86.json"
 install -Dm644 "$repo_root/LICENSE" \
     "$payload/share/doc/vkbasalt/LICENSE"
 install -Dm644 "$repo_root/src/reshade/LICENSE.md" \
     "$payload/share/doc/vkbasalt/RESHade-LICENSE.md"
+
+vulkan_api_version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["layer"]["api_version"])' "$build64/packaging/vkBasalt.x86_64.json")"
 
 source_commit="$(git -C "$repo_root" rev-parse HEAD)"
 upstream_commit="$(tr -d '[:space:]' < "$repo_root/packaging/UPSTREAM_BASE")"
@@ -112,6 +127,9 @@ printf '%s\n' \
     "commit=$source_commit" \
     "upstream_repository=https://github.com/DadSchoorse/vkBasalt" \
     "upstream_commit=$upstream_commit" \
+    "vulkan_headers_revision=$vulkan_headers_revision" \
+    "vulkan_headers_commit=$vulkan_headers_commit" \
+    "vulkan_api_version=$vulkan_api_version" \
     > "$payload/share/doc/vkbasalt/SOURCE"
 
 verify_elf_class() {
