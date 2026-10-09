@@ -34,6 +34,25 @@ namespace vkBasalt
         VkSwapchainCreateInfoKHR             swapchainCreateInfo;
         VkExtent2D                           imageExtent;
         VkFormat                             format;
+        VkColorSpaceKHR                       colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+        bool hdr() const { return colorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT ||
+            colorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT; }
+        VkFormat effectFormat() const { return hdr() ? VK_FORMAT_R16G16B16A16_SFLOAT : format; }
+        // CAS can sample and render different normalized formats directly.
+        // Keep RGBA16F between effects; scRGB still needs both transfer passes.
+        bool needsHdrInputPass(const std::vector<std::string>& effects) const {
+            return hdr() && !effects.empty() &&
+                (colorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT || effects.front() != "cas");
+        }
+        bool needsHdrOutputPass(const std::vector<std::string>& effects) const {
+            return hdr() && !effects.empty() &&
+                (colorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT || effects.back() != "cas");
+        }
+        size_t intermediateCount(const std::vector<std::string>& effects) const {
+            return effects.empty() ? 0 : effects.size() - 1 +
+                needsHdrInputPass(effects) + needsHdrOutputPass(effects);
+        }
+
         uint32_t                             imageCount;
         std::vector<VkImage>                 images;
         std::vector<VkImage>                 fakeImages;

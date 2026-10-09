@@ -16,6 +16,7 @@
 
 namespace vkBasalt
 {
+    VkBool32 VKAPI_CALL makoSetSwapchainColorSpaceV1(VkDevice, VkSwapchainKHR, VkColorSpaceKHR);
     extern std::shared_ptr<Config>                                               pConfig;
     std::shared_ptr<EffectGraph>                                                 buildEffectGraph(LogicalSwapchain*, const std::vector<std::string>&);
     void                                                                         updateLiveEffectGraph(LogicalSwapchain*);
@@ -95,7 +96,27 @@ namespace
         CREATE(CreateDescriptorSetLayout);
         CREATE(CreateDescriptorPool);
         CREATE(CreatePipelineLayout);
-        CREATE(CreateRenderPass);
+        d.vkd.CreateRenderPass = +[](VkDevice device, const VkRenderPassCreateInfo* info,
+                                    const VkAllocationCallbacks* allocator, VkRenderPass* renderPass) {
+            for (uint32_t i = 0; i < info->subpassCount; ++i)
+                for (uint32_t j = 0; j < info->pSubpasses[i].colorAttachmentCount; ++j)
+                {
+                    const auto attachment = info->pSubpasses[i].pColorAttachments[j].attachment;
+                    if (attachment == VK_ATTACHMENT_UNUSED ||
+                        info->pAttachments[attachment].loadOp != VK_ATTACHMENT_LOAD_OP_LOAD)
+                        continue;
+                    bool readDependency = false;
+                    for (uint32_t k = 0; k < info->dependencyCount; ++k)
+                    {
+                        const auto& dependency = info->pDependencies[k];
+                        readDependency |= dependency.dstSubpass == i &&
+                            (dependency.dstStageMask & VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT) &&
+                            (dependency.dstAccessMask & VK_ACCESS_COLOR_ATTACHMENT_READ_BIT);
+                    }
+                    assert(readDependency);
+                }
+            return Mock<PFN_vkCreateRenderPass>::create(device, info, allocator, renderPass);
+        };
         CREATE(CreateFramebuffer);
         CREATE(CreateSemaphore);
         CREATE(CreateSampler);
@@ -207,6 +228,41 @@ namespace
 
 int main()
 {
+    // Independently declared MAKO v1 ABI: explicit colour, correct owner and
+    // pre-exposure lifetime are required, including handle reuse.
+    {
+        using Handoff = VkBool32 (VKAPI_PTR *)(VkDevice, VkSwapchainKHR, VkColorSpaceKHR);
+        static_assert(std::is_same_v<decltype(&vkBasalt::makoSetSwapchainColorSpaceV1), Handoff>);
+        const Handoff handoff = &vkBasalt::makoSetSwapchainColorSpaceV1;
+        auto device = std::make_shared<vkBasalt::LogicalDevice>();
+        device->device = handleFromValue<VkDevice>(19);
+        auto swapchain = std::make_shared<vkBasalt::LogicalSwapchain>();
+        swapchain->pLogicalDevice = device.get();
+        swapchain->format = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+        const auto handle = handleFromValue<VkSwapchainKHR>(20);
+        assert(!handoff(device->device, handle, VK_COLOR_SPACE_HDR10_ST2084_EXT));
+        vkBasalt::swapchainMap[handle] = swapchain;
+        assert(!handoff(VK_NULL_HANDLE, handle, VK_COLOR_SPACE_HDR10_ST2084_EXT));
+        assert(!handoff(device->device, handle, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT));
+        assert(!handoff(device->device, handle, VK_COLOR_SPACE_HDR10_HLG_EXT));
+        assert(handoff(device->device, handle, VK_COLOR_SPACE_HDR10_ST2084_EXT));
+        assert(swapchain->hdr());
+        swapchain->fakeImages.push_back(handleFromValue<VkImage>(21));
+        assert(!handoff(device->device, handle, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR));
+        swapchain->fakeImages.clear();
+        vkBasalt::swapchainMap.erase(handle);
+        assert(!handoff(device->device, handle, VK_COLOR_SPACE_HDR10_ST2084_EXT));
+        swapchain = std::make_shared<vkBasalt::LogicalSwapchain>();
+        swapchain->pLogicalDevice = device.get();
+        swapchain->format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        vkBasalt::swapchainMap[handle] = swapchain;
+        assert(!swapchain->hdr());
+        assert(handoff(device->device, handle, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT));
+        assert(handoff(device->device, handle, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR));
+        assert(!swapchain->hdr());
+        vkBasalt::swapchainMap.clear();
+    }
+
     setenv("VKBASALT_CONFIG_FILE", "/dev/null", 1);
     setenv("VKBASALT_LOG_LEVEL", "none", 1);
     vkBasalt::Config              config;
@@ -280,45 +336,53 @@ technique Tone { pass { VertexShader = VS; PixelShader = PS; } }
     std::ofstream(root / "vkBasalt.conf") << "effects = CustomTone:cas\nCustomTone = \"" << (root / "Tone.fx").string() << "\"\n";
     setenv("VKBASALT_CONFIG_FILE", (root / "vkBasalt.conf").c_str(), 1);
     vkBasalt::pConfig = std::make_shared<vkBasalt::Config>();
-    size_t total      = 0;
-    for (size_t failure = 0; failure <= total; ++failure)
+    size_t total = 0;
+    for (auto color : {VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, VK_COLOR_SPACE_HDR10_ST2084_EXT,
+                       VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT})
     {
-        commandSlot = 0;
-        calls       = 0;
-        failAt      = 0;
-        vkBasalt::LogicalSwapchain swapchain{};
-        swapchain.pLogicalDevice                       = &d;
-        swapchain.format                               = VK_FORMAT_B8G8R8A8_UNORM;
-        swapchain.imageExtent                          = {320, 240};
-        swapchain.swapchainCreateInfo.imageFormat      = swapchain.format;
-        swapchain.swapchainCreateInfo.imageExtent      = swapchain.imageExtent;
-        swapchain.swapchainCreateInfo.imageArrayLayers = 1;
-        swapchain.imageCount                           = 2;
-        swapchain.images                               = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-        swapchain.fakeImages                           = swapchain.images;
-        d.supportsMutableFormat                        = true;
-        auto previous                                  = vkBasalt::buildEffectGraph(&swapchain, {"cas"});
-        swapchain.activeEffectGraph                    = previous;
-        swapchain.effectGraphs["cas"]                  = previous;
-        swapchain.effectGraphs[""]                     = vkBasalt::buildEffectGraph(&swapchain, {});
-        const auto originalResources                   = live;
-        calls                                          = 0;
-        failAt                                         = failure;
-        swapchain.effectSelectionRevision              = UINT64_MAX;
-        vkBasalt::updateLiveEffectGraph(&swapchain);
-        if (failure == 0)
+        total = 0;
+        for (size_t failure = 0; failure <= total; ++failure)
         {
-            total = calls;
-            assert(swapchain.activeEffectGraph != previous);
+            commandSlot = 0;
+            calls       = 0;
+            failAt      = 0;
+            vkBasalt::LogicalSwapchain swapchain{};
+            swapchain.pLogicalDevice                       = &d;
+            swapchain.colorSpace                           = color;
+            swapchain.format                               = color == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT
+                ? VK_FORMAT_R16G16B16A16_SFLOAT : color == VK_COLOR_SPACE_HDR10_ST2084_EXT
+                ? VK_FORMAT_A2B10G10R10_UNORM_PACK32 : VK_FORMAT_B8G8R8A8_UNORM;
+            swapchain.imageExtent                          = {320, 240};
+            swapchain.swapchainCreateInfo.imageFormat      = swapchain.format;
+            swapchain.swapchainCreateInfo.imageExtent      = swapchain.imageExtent;
+            swapchain.swapchainCreateInfo.imageArrayLayers = 1;
+            swapchain.imageCount                           = 2;
+            swapchain.images                               = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+            swapchain.fakeImages                           = swapchain.images;
+            d.supportsMutableFormat                        = true;
+            auto previous                                  = vkBasalt::buildEffectGraph(&swapchain, {"cas"});
+            swapchain.activeEffectGraph                    = previous;
+            swapchain.effectGraphs["cas"]                  = previous;
+            swapchain.effectGraphs[""]                     = vkBasalt::buildEffectGraph(&swapchain, {});
+            const auto originalResources                   = live;
+            calls                                          = 0;
+            failAt                                         = failure;
+            swapchain.effectSelectionRevision              = UINT64_MAX;
+            vkBasalt::updateLiveEffectGraph(&swapchain);
+            if (failure == 0)
+            {
+                total = calls;
+                assert(swapchain.activeEffectGraph != previous);
+            }
+            else
+            {
+                assert(swapchain.activeEffectGraph == previous);
+                assert(live == originalResources);
+                assert(swapchain.intermediateImageSets.size() == swapchain.intermediateCount({"cas"}));
+            }
+            swapchain.destroy();
+            assert(live.empty());
         }
-        else
-        {
-            assert(swapchain.activeEffectGraph == previous);
-            assert(live == originalResources);
-            assert(swapchain.intermediateImageSets.empty());
-        }
-        swapchain.destroy();
-        assert(live.empty());
     }
     // Startup allocation errors return a VkResult; no exception or null graph
     // may escape through the Vulkan ABI. A subsequent call can start cleanly.

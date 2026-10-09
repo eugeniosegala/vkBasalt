@@ -64,7 +64,8 @@ namespace vkBasalt
                   std::vector<VkImage> inputImages,
                   std::vector<VkImage> outputImages,
                   Config*              pConfig,
-                  VkDeviceSize         dynamicUniformSize = 0);
+                  VkDeviceSize         dynamicUniformSize = 0,
+                  VkFormat             inputFormat = VK_FORMAT_UNDEFINED);
         void writeDynamicUniform(uint32_t imageIndex, const void* data, VkDeviceSize size);
     };
 } // namespace vkBasalt

@@ -79,7 +79,7 @@ meson setup "$build64" "$repo_root" \
     --libdir=lib \
     -Dwith_json=false \
     -Dvulkan_headers="$vulkan_headers_include"
-meson compile -C "$build64"
+meson compile -C "$build64" -j "${MAKO_BUILD_JOBS:-4}"
 meson test -C "$build64" --print-errorlogs
 DESTDIR="$stage64" meson install -C "$build64"
 
@@ -91,7 +91,7 @@ meson setup "$build32" "$repo_root" \
     --libdir=lib32 \
     -Dwith_json=false \
     -Dvulkan_headers="$vulkan_headers_include"
-meson compile -C "$build32"
+meson compile -C "$build32" -j "${MAKO_BUILD_JOBS:-4}"
 meson test -C "$build32" --print-errorlogs
 DESTDIR="$stage32" meson install -C "$build32"
 

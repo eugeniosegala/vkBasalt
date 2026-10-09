@@ -5,6 +5,10 @@
 
 namespace vkBasalt
 {
+    const std::vector<uint32_t> hdr_frag = {
+#include "hdr.frag.h"
+    };
+
     const std::vector<uint32_t> cas_frag = {
 #include "cas.frag.h"
     };

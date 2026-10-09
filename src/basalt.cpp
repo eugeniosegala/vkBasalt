@@ -32,6 +32,7 @@
 #include "fake_swapchain.hpp"
 #include "renderpass.hpp"
 #include "format.hpp"
+#include "effect_hdr.hpp"
 #include "logger.hpp"
 
 #include "effect.hpp"
@@ -107,8 +108,10 @@ namespace vkBasalt
         while (pLogicalSwapchain->intermediateImageSets.size() < count)
         {
             VkDeviceMemory memory = VK_NULL_HANDLE;
+            auto imageInfo = pLogicalSwapchain->swapchainCreateInfo;
+            imageInfo.imageFormat = pLogicalSwapchain->effectFormat();
             auto images = createFakeSwapchainImages(pLogicalSwapchain->pLogicalDevice,
-                                                    pLogicalSwapchain->swapchainCreateInfo,
+                                                    imageInfo,
                                                     pLogicalSwapchain->imageCount,
                                                     memory);
             pLogicalSwapchain->intermediateImageSets.push_back(std::move(images));
@@ -132,18 +135,21 @@ namespace vkBasalt
                                                    const std::string&         effectName,
                                                    const std::vector<VkImage>& inputImages,
                                                    const std::vector<VkImage>& outputImages,
-                                                   Config* effectConfig)
+                                                   Config* effectConfig,
+                                                   VkFormat inputFormat,
+                                                   VkFormat outputFormat)
     {
         LogicalDevice* pLogicalDevice = pLogicalSwapchain->pLogicalDevice;
-        const VkFormat unormFormat = convertToUNORM(pLogicalSwapchain->format);
-        const VkFormat srgbFormat = convertToSRGB(pLogicalSwapchain->format);
+        const VkFormat unormFormat = convertToUNORM(pLogicalSwapchain->effectFormat());
+        const VkFormat srgbFormat = convertToSRGB(pLogicalSwapchain->effectFormat());
 
         if (effectName == "fxaa")
             return std::make_shared<FxaaEffect>(
                 pLogicalDevice, srgbFormat, pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get());
         if (effectName == "cas")
             return std::make_shared<CasEffect>(
-                pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get());
+                pLogicalDevice, convertToUNORM(outputFormat), pLogicalSwapchain->imageExtent,
+                inputImages, outputImages, pConfig.get(), convertToUNORM(inputFormat));
         if (effectName == "deband" || effectName == "makoDeband")
             return std::make_shared<DebandEffect>(
                 pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get());
@@ -159,7 +165,7 @@ namespace vkBasalt
         auto module = compileReshadeModule(*effectConfig, effectName, pLogicalSwapchain->imageExtent,
                                            unormFormat == VK_FORMAT_A2R10G10B10_UNORM_PACK32);
         return std::make_shared<ReshadeEffect>(pLogicalDevice,
-                                               pLogicalSwapchain->format,
+                                               pLogicalSwapchain->effectFormat(),
                                                pLogicalSwapchain->imageExtent,
                                                inputImages,
                                                outputImages,
@@ -188,21 +194,40 @@ namespace vkBasalt
         }
         else
         {
-            ensureIntermediateImageSets(pLogicalSwapchain, effectNames.size() - 1);
+            ensureIntermediateImageSets(pLogicalSwapchain, pLogicalSwapchain->intermediateCount(effectNames));
             ensureNonMutableOutputImages(pLogicalSwapchain);
             const auto& finalImages = pLogicalDevice->supportsMutableFormat
                                           ? pLogicalSwapchain->images
                                           : pLogicalSwapchain->nonMutableOutputImages;
 
-            for (size_t i = 0; i < effectNames.size(); ++i)
-            {
-                const auto& inputImages = i == 0
-                                              ? pLogicalSwapchain->fakeImages
-                                              : pLogicalSwapchain->intermediateImageSets[i - 1];
-                const auto& outputImages = i + 1 == effectNames.size()
-                                               ? finalImages
-                                               : pLogicalSwapchain->intermediateImageSets[i];
-                graph->effects.push_back(createConfiguredEffect(pLogicalSwapchain, effectNames[i], inputImages, outputImages, graph->config.get()));
+            const bool inputPass = pLogicalSwapchain->needsHdrInputPass(effectNames);
+            const bool outputPass = pLogicalSwapchain->needsHdrOutputPass(effectNames);
+            const bool linear = pLogicalSwapchain->colorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT;
+            if (inputPass) {
+                graph->effects.push_back(std::make_shared<HdrEffect>(pLogicalDevice,
+                    pLogicalSwapchain->format, pLogicalSwapchain->effectFormat(),
+                    pLogicalSwapchain->imageExtent, pLogicalSwapchain->fakeImages,
+                    pLogicalSwapchain->intermediateImageSets[0], graph->config.get(), linear ? 1 : 0));
+            }
+            const size_t stages = effectNames.size() + inputPass + outputPass;
+            for (size_t i = 0; i < effectNames.size(); ++i) {
+                const size_t stage = i + inputPass;
+                const bool first = stage == 0;
+                const bool last = stage + 1 == stages;
+                const auto& inputImages = first ? pLogicalSwapchain->fakeImages
+                    : pLogicalSwapchain->intermediateImageSets[stage - 1];
+                const auto& outputImages = last ? finalImages
+                    : pLogicalSwapchain->intermediateImageSets[stage];
+                graph->effects.push_back(createConfiguredEffect(pLogicalSwapchain, effectNames[i],
+                    inputImages, outputImages, graph->config.get(),
+                    first ? pLogicalSwapchain->format : pLogicalSwapchain->effectFormat(),
+                    last ? pLogicalSwapchain->format : pLogicalSwapchain->effectFormat()));
+            }
+            if (outputPass) {
+                graph->effects.push_back(std::make_shared<HdrEffect>(pLogicalDevice,
+                    pLogicalSwapchain->effectFormat(), pLogicalSwapchain->format,
+                    pLogicalSwapchain->imageExtent, pLogicalSwapchain->intermediateImageSets[stages - 2],
+                    finalImages, graph->config.get(), linear ? 2 : 0));
             }
 
             if (!pLogicalDevice->supportsMutableFormat)
@@ -284,8 +309,7 @@ namespace vkBasalt
             // Do not recompile the same bad edit on every present. A later
             // configuration revision can retry; the running graph is unchanged.
             swapchain->effectSelectionRevision = revision;
-            const auto count = active->effectNames.size();
-            trimIntermediateImageSets(swapchain, count > 0 ? count - 1 : 0);
+            trimIntermediateImageSets(swapchain, swapchain->intermediateCount(active->effectNames));
             Logger::warn(std::string("live effect update rejected; keeping previous graph: ") + error.what());
             return;
         }
@@ -316,7 +340,7 @@ namespace vkBasalt
             ++retiredGraphs;
         }
         swapchain->effectGraphs[key] = candidate;
-        trimIntermediateImageSets(swapchain, requested.empty() ? 0 : requested.size() - 1);
+        trimIntermediateImageSets(swapchain, swapchain->intermediateCount(requested));
         Logger::info("activated live effect graph: " + (key.empty() ? std::string("off") : key));
         if (retiredGraphs > 0)
             Logger::info("retired " + std::to_string(retiredGraphs) + " inactive live effect graph(s)");
@@ -643,13 +667,36 @@ namespace vkBasalt
         pLogicalSwapchain->swapchainCreateInfo = *pCreateInfo;
         pLogicalSwapchain->imageExtent         = modifiedCreateInfo.imageExtent;
         pLogicalSwapchain->format              = modifiedCreateInfo.imageFormat;
+        pLogicalSwapchain->colorSpace          = pCreateInfo->imageColorSpace;
         pLogicalSwapchain->imageCount          = 0;
 
         VkResult result = pLogicalDevice->vkd.CreateSwapchainKHR(device, &modifiedCreateInfo, pAllocator, pSwapchain);
 
-        swapchainMap[*pSwapchain] = pLogicalSwapchain;
+        if (result == VK_SUCCESS)
+            swapchainMap[*pSwapchain] = pLogicalSwapchain;
 
         return result;
+    }
+
+    // Private MAKO ABI v1: called after lower creation and before image exposure.
+    // It supplies colour interpretation only; it does not alter WSI transport.
+    VkBool32 VKAPI_CALL makoSetSwapchainColorSpaceV1(VkDevice device,
+            VkSwapchainKHR swapchain, VkColorSpaceKHR colorSpace) {
+        scoped_lock l(globalLock);
+        const auto found = swapchainMap.find(swapchain);
+        if (found == swapchainMap.end() || found->second->pLogicalDevice->device != device ||
+                !found->second->fakeImages.empty())
+            return VK_FALSE;
+        const auto format = found->second->format;
+        if ((colorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT &&
+                format != VK_FORMAT_A2B10G10R10_UNORM_PACK32 && format != VK_FORMAT_A2R10G10B10_UNORM_PACK32) ||
+            (colorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT && format != VK_FORMAT_R16G16B16A16_SFLOAT))
+            return VK_FALSE;
+        if (colorSpace != VK_COLOR_SPACE_HDR10_ST2084_EXT &&
+            colorSpace != VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT && colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+            return VK_FALSE;
+        found->second->colorSpace = colorSpace;
+        return VK_TRUE;
     }
 
     VKAPI_ATTR VkResult VKAPI_CALL vkBasalt_GetSwapchainImagesKHR(VkDevice       device,
@@ -1060,6 +1107,8 @@ extern "C"
             vkBasalt::pConfig = std::shared_ptr<vkBasalt::Config>(new vkBasalt::Config());
         }
 
+        if (!std::strcmp(pName, "makoSetSwapchainColorSpaceV1"))
+            return reinterpret_cast<PFN_vkVoidFunction>(&vkBasalt::makoSetSwapchainColorSpaceV1);
         INTERCEPT_CALLS
 
         {
@@ -1075,6 +1124,8 @@ extern "C"
             vkBasalt::pConfig = std::shared_ptr<vkBasalt::Config>(new vkBasalt::Config());
         }
 
+        if (!std::strcmp(pName, "makoSetSwapchainColorSpaceV1"))
+            return reinterpret_cast<PFN_vkVoidFunction>(&vkBasalt::makoSetSwapchainColorSpaceV1);
         INTERCEPT_CALLS
 
         {

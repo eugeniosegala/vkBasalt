@@ -23,7 +23,8 @@ namespace vkBasalt
                             std::vector<VkImage> inputImages,
                             std::vector<VkImage> outputImages,
                             Config*              pConfig,
-                            VkDeviceSize         dynamicUniformSize)
+                            VkDeviceSize         dynamicUniformSize,
+                            VkFormat             inputFormat)
     {
         Logger::debug("in creating SimpleEffect");
 
@@ -35,7 +36,7 @@ namespace vkBasalt
         this->pConfig        = pConfig;
         this->dynamicUniformSize = dynamicUniformSize;
 
-        inputImageViews = createImageViews(pLogicalDevice, format, inputImages);
+        inputImageViews = createImageViews(pLogicalDevice, inputFormat == VK_FORMAT_UNDEFINED ? format : inputFormat, inputImages);
         Logger::debug("created input ImageViews");
         outputImageViews = createImageViews(pLogicalDevice, format, outputImages);
         Logger::debug("created ImageViews");

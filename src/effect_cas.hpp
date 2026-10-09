@@ -23,7 +23,8 @@ namespace vkBasalt
                   VkExtent2D           imageExtent,
                   std::vector<VkImage> inputImages,
                   std::vector<VkImage> outputImages,
-                  Config*              pConfig);
+                  Config*              pConfig,
+                  VkFormat             inputFormat = VK_FORMAT_UNDEFINED);
         void updateEffect(uint32_t imageIndex) override;
         ~CasEffect();
 

@@ -69,6 +69,12 @@ ninja -C builddir.32 install
 
 Run `scripts/package-mako-release.sh mako-v0.3.2.10-N /tmp/vkBasalt-candidate.tar.xz` to compile and test both architectures without installing or publishing. The archive records the exact Vulkan header tag, resolved commit, and declared API in `share/doc/vkbasalt/SOURCE`. Tests cover Vulkan 1.4 forwarding and failed instance creation as well as live effects and resource rollback. A new `mako-v*` tag triggers `.github/workflows/release-mako.yml`, which runs that same tested packager and publishes an immutable attested archive. MAKO must verify the downloaded public asset before updating its dependency pin and generated Flatpak module.
 
+## HDR effect boundary
+
+MAKO's isolated Gamescope bridge supplies the original application colour space through the private `makoSetSwapchainColorSpaceV1(VkDevice, VkSwapchainKHR, VkColorSpaceKHR) -> VkBool32` device-dispatch hook after lower creation and before image enumeration. The hook rejects unknown swapchains, device mismatches, invalid HDR format pairs, and late changes after private images exist. Bit depth alone never enables HDR processing. Ordinary Vulkan callers retain the colour space in their original creation structure.
+
+For HDR10/PQ and linear scRGB, active effect chains use RGBA16F intermediate images containing PQ BT.2020 code values. Linear scRGB is converted from 80-nit BT.709 units before the chain and restored afterwards; HDR10 retains its transfer function. Linear scRGB needs two conversion passes for active chains. HDR10 skips the input copy when CAS is first and the output copy when CAS is last: CAS-only runs in one pass directly between the original packed 10-bit images, while multi-effect intermediates remain RGBA16F. This removes full-resolution traffic without lowering effect precision; avoiding intermediate rounding can slightly change CAS-only pixels. An empty chain copies the original images without colour conversion. Live selection changes retain the same colour-space contract and retire unused intermediates. Managed and custom effects run inside that bounded display-code domain; arbitrary custom shaders may deliberately clamp, remap colour, or use their own lower-precision intermediate textures and still need visual qualification.
+
 ## Packaging status
 
 [Debian](https://tracker.debian.org/pkg/vkbasalt) `sudo apt install vkbasalt`

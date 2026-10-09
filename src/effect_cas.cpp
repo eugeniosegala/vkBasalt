@@ -27,7 +27,8 @@ namespace vkBasalt
                          VkExtent2D           imageExtent,
                          std::vector<VkImage> inputImages,
                          std::vector<VkImage> outputImages,
-                         Config*              pConfig)
+                         Config*              pConfig,
+                         VkFormat             inputFormat)
     {
 
         vertexCode   = full_screen_triangle_vert;
@@ -36,7 +37,7 @@ namespace vkBasalt
         pVertexSpecInfo   = nullptr;
         pFragmentSpecInfo = nullptr;
 
-        init(pLogicalDevice, format, imageExtent, inputImages, outputImages, pConfig, sizeof(CasSettings));
+        init(pLogicalDevice, format, imageExtent, inputImages, outputImages, pConfig, sizeof(CasSettings), inputFormat);
         appliedConfigRevisions.assign(inputImages.size(), std::numeric_limits<uint64_t>::max());
     }
     void CasEffect::updateEffect(uint32_t imageIndex)

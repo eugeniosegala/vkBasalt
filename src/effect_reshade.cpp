@@ -523,7 +523,8 @@ namespace vkBasalt
             subpassDependency.srcStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
             subpassDependency.dstStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
             subpassDependency.srcAccessMask   = 0;
-            subpassDependency.dstAccessMask   = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            // LOAD and blending read the attachment after its layout transition.
+            subpassDependency.dstAccessMask   = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
             subpassDependency.dependencyFlags = 0;
 
             VkRenderPassCreateInfo renderPassCreateInfo;

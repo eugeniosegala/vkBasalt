@@ -1,4 +1,5 @@
 shader_src = [
+    'hdr.frag.glsl',
     'cas.frag.glsl',
     'deband.frag.glsl',
     'dls.frag.glsl',

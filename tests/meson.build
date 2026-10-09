@@ -66,3 +66,7 @@ layer_interface_test = executable(
 test('Vulkan layer version and forwarding', layer_interface_test,
      args: [join_paths(meson.project_build_root(), 'packaging/vkBasalt.x86_64.json'),
             join_paths(meson.project_build_root(), 'packaging/vkBasalt.x86.json')])
+
+hdr_policy_test = executable('hdr_policy_test', 'hdr_policy_test.cpp',
+    include_directories: [include_directories('../src'), vkBasalt_include_path])
+test('explicit HDR colour and graph lifetime', hdr_policy_test)
