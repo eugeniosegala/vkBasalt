@@ -35,7 +35,8 @@ namespace vkBasalt
                                  std::vector<VkImage> outputImages,
                                  Config*              pConfig,
                                  std::string          effectName,
-                                 PreparedReshadeModule compiledModule)
+                                 PreparedReshadeModule compiledModule,
+                                 VkFormat inputFormat)
     {
         this->pLogicalDevice = pLogicalDevice;
         auto rescue = std::shared_ptr<ReshadeEffect>(new ReshadeEffect);
@@ -60,8 +61,14 @@ namespace vkBasalt
         inputOutputFormatUNORM = convertToUNORM(format);
         inputOutputFormatSRGB  = convertToSRGB(format);
 
-        inputImageViewsSRGB  = createImageViews(pLogicalDevice, inputOutputFormatSRGB, inputImages);
-        inputImageViewsUNORM = createImageViews(pLogicalDevice, inputOutputFormatUNORM, inputImages);
+        // HDR10 can be sampled directly; only the effect output and private
+        // ping-pong images need the graph's RGBA16F working format.
+        if (inputFormat == VK_FORMAT_UNDEFINED)
+            inputFormat = format;
+        const auto inputFormatUNORM = convertToUNORM(inputFormat);
+        const auto inputFormatSRGB = convertToSRGB(inputFormat);
+        inputImageViewsSRGB  = createImageViews(pLogicalDevice, inputFormatSRGB, inputImages);
+        inputImageViewsUNORM = createImageViews(pLogicalDevice, inputFormatUNORM, inputImages);
         Logger::debug("created input ImageViews");
         outputImageViewsSRGB  = createImageViews(pLogicalDevice, inputOutputFormatSRGB, outputImages);
         outputImageViewsUNORM = createImageViews(pLogicalDevice, inputOutputFormatUNORM, outputImages);
@@ -131,8 +138,8 @@ namespace vkBasalt
                 textureImageViewsSRGB[module.textures[i].unique_name] = inputImageViewsSRGB;
                 renderImageViewsSRGB[module.textures[i].unique_name]  = inputImageViewsSRGB;
 
-                textureFormatsUNORM[module.textures[i].unique_name] = inputOutputFormatUNORM;
-                textureFormatsSRGB[module.textures[i].unique_name]  = inputOutputFormatSRGB;
+                textureFormatsUNORM[module.textures[i].unique_name] = inputFormatUNORM;
+                textureFormatsSRGB[module.textures[i].unique_name]  = inputFormatSRGB;
                 continue;
             }
             if (module.textures[i].semantic == "DEPTH")
@@ -143,8 +150,8 @@ namespace vkBasalt
                 textureImageViewsSRGB[module.textures[i].unique_name] = inputImageViewsSRGB;
                 renderImageViewsSRGB[module.textures[i].unique_name]  = inputImageViewsSRGB;
 
-                textureFormatsUNORM[module.textures[i].unique_name] = inputOutputFormatUNORM;
-                textureFormatsSRGB[module.textures[i].unique_name]  = inputOutputFormatSRGB;
+                textureFormatsUNORM[module.textures[i].unique_name] = inputFormatUNORM;
+                textureFormatsSRGB[module.textures[i].unique_name]  = inputFormatSRGB;
                 continue;
             }
             VkExtent3D textureExtent = {module.textures[i].width, module.textures[i].height, 1};
@@ -517,15 +524,23 @@ namespace vkBasalt
             subpassDescription.preserveAttachmentCount = 0;
             subpassDescription.pPreserveAttachments    = nullptr;
 
-            VkSubpassDependency subpassDependency;
-            subpassDependency.srcSubpass      = VK_SUBPASS_EXTERNAL;
-            subpassDependency.dstSubpass      = 0;
-            subpassDependency.srcStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-            subpassDependency.dstStageMask    = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-            subpassDependency.srcAccessMask   = 0;
-            // LOAD and blending read the attachment after its layout transition.
-            subpassDependency.dstAccessMask   = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-            subpassDependency.dependencyFlags = 0;
+            // A later FX pass may sample this attachment, then reuse it as
+            // a render target. Cover both directions of the ping-pong access,
+            // including the automatic final-layout transition.
+            VkSubpassDependency dependencies[2]{};
+            dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+            dependencies[0].dstSubpass = 0;
+            dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            dependencies[1].srcSubpass = 0;
+            dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+            dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
             VkRenderPassCreateInfo renderPassCreateInfo;
             renderPassCreateInfo.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -535,8 +550,8 @@ namespace vkBasalt
             renderPassCreateInfo.pAttachments    = attachmentDescriptions.data();
             renderPassCreateInfo.subpassCount    = 1;
             renderPassCreateInfo.pSubpasses      = &subpassDescription;
-            renderPassCreateInfo.dependencyCount = 1;
-            renderPassCreateInfo.pDependencies   = &subpassDependency;
+            renderPassCreateInfo.dependencyCount = 2;
+            renderPassCreateInfo.pDependencies   = dependencies;
 
             VkRenderPass renderPass = VK_NULL_HANDLE;
             VkResult     result = pLogicalDevice->vkd.CreateRenderPass(pLogicalDevice->device, &renderPassCreateInfo, nullptr, &renderPass);

@@ -13,12 +13,17 @@
 #include <tuple>
 #include <type_traits>
 #include <cstdint>
+#include <cstring>
 
 namespace vkBasalt
 {
+    VkBool32 VKAPI_CALL makoSetSwapchainHdrPrecisionV1(VkDevice, VkSwapchainKHR, VkBool32);
     VkBool32 VKAPI_CALL makoSetSwapchainColorSpaceV1(VkDevice, VkSwapchainKHR, VkColorSpaceKHR);
     extern std::shared_ptr<Config>                                               pConfig;
     std::shared_ptr<EffectGraph>                                                 buildEffectGraph(LogicalSwapchain*, const std::vector<std::string>&);
+    std::shared_ptr<Effect> createConfiguredEffect(LogicalSwapchain*, const std::string&,
+        const std::vector<VkImage>&, const std::vector<VkImage>&, Config*, VkFormat, VkFormat, VkFormat = VK_FORMAT_UNDEFINED);
+    VkFormat requestedEffectFormat(LogicalSwapchain*);
     void                                                                         updateLiveEffectGraph(LogicalSwapchain*);
     extern std::unordered_map<void*, std::shared_ptr<LogicalDevice>>             deviceMap;
     extern std::unordered_map<VkSwapchainKHR, std::shared_ptr<LogicalSwapchain>> swapchainMap;
@@ -31,8 +36,13 @@ namespace
     uintptr_t          commandSlots[64]{};
     size_t             commandSlot    = 0;
     VkResult           drainResult    = VK_SUCCESS;
+    size_t drainCall = 0, failDrainAt = 0;
+    VkFormatFeatureFlags missingFormatFeatures = 0;
     uintptr_t          deviceDispatch = 0;
     unsigned char      mapping[4096]{};
+    std::vector<VkBool32> fragmentSpecializations;
+    std::vector<VkFormat> imageViewFormats;
+    size_t sampledOutputDependencies = 0;
     // Vulkan uses pointers for non-dispatchable handles on 64-bit and uint64_t
     // on 32-bit. Keep the fault tracker independent of that representation.
     template<typename T>
@@ -89,15 +99,35 @@ namespace
     {
         vkBasalt::LogicalDevice d{};
         d.device = reinterpret_cast<VkDevice>(&deviceDispatch);
+        d.vki.GetPhysicalDeviceFormatProperties = +[](VkPhysicalDevice, VkFormat, VkFormatProperties* props) {
+            props->optimalTilingFeatures = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
+                VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT |
+                VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT | VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
+            props->optimalTilingFeatures &= ~missingFormatFeatures;
+        };
 #define CREATE(name)  d.vkd.name = &Mock<decltype(d.vkd.name)>::create
 #define DESTROY(name) d.vkd.name = &Mock<decltype(d.vkd.name)>::destroy
-        CREATE(CreateImageView);
+        d.vkd.CreateImageView = +[](VkDevice device, const VkImageViewCreateInfo* info,
+                                    const VkAllocationCallbacks* allocator, VkImageView* view) {
+            imageViewFormats.push_back(info->format);
+            return Mock<PFN_vkCreateImageView>::create(device, info, allocator, view);
+        };
         CREATE(CreateShaderModule);
         CREATE(CreateDescriptorSetLayout);
         CREATE(CreateDescriptorPool);
         CREATE(CreatePipelineLayout);
         d.vkd.CreateRenderPass = +[](VkDevice device, const VkRenderPassCreateInfo* info,
                                     const VkAllocationCallbacks* allocator, VkRenderPass* renderPass) {
+            for (uint32_t i = 0; i < info->dependencyCount; ++i) {
+                const auto& dependency = info->pDependencies[i];
+                if (dependency.srcSubpass == 0 && dependency.dstSubpass == VK_SUBPASS_EXTERNAL &&
+                    (dependency.srcStageMask & VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT) &&
+                    (dependency.srcAccessMask & VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT) &&
+                    (dependency.dstStageMask & VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT) &&
+                    (dependency.dstAccessMask & VK_ACCESS_SHADER_READ_BIT))
+                    ++sampledOutputDependencies;
+            }
             for (uint32_t i = 0; i < info->subpassCount; ++i)
                 for (uint32_t j = 0; j < info->pSubpasses[i].colorAttachmentCount; ++j)
                 {
@@ -146,8 +176,22 @@ namespace
             return VK_SUCCESS;
         };
         d.vkd.CreateGraphicsPipelines =
-            +[](VkDevice, VkPipelineCache, uint32_t count, const VkGraphicsPipelineCreateInfo*, const VkAllocationCallbacks*, VkPipeline* pipelines) {
+            +[](VkDevice, VkPipelineCache, uint32_t count, const VkGraphicsPipelineCreateInfo* info, const VkAllocationCallbacks*, VkPipeline* pipelines) {
                 assert(count == 1);
+                for (uint32_t i = 0; i < info->stageCount; ++i)
+                {
+                    const auto& stage = info->pStages[i];
+                    if (stage.stage != VK_SHADER_STAGE_FRAGMENT_BIT || !stage.pSpecializationInfo) continue;
+                    const auto& spec = *stage.pSpecializationInfo;
+                    if (spec.mapEntryCount == 1 && spec.pMapEntries[0].constantID == 0 &&
+                        spec.pMapEntries[0].size == sizeof(VkBool32))
+                    {
+                        VkBool32 value;
+                        assert(spec.pMapEntries[0].offset + sizeof(value) <= spec.dataSize);
+                        std::memcpy(&value, static_cast<const char*>(spec.pData) + spec.pMapEntries[0].offset, sizeof(value));
+                        fragmentSpecializations.push_back(value);
+                    }
+                }
                 // Vulkan permits partial pipeline results when a batch returns an error.
                 *pipelines = allocate<VkPipeline>();
                 return ++calls == failAt ? VK_ERROR_OUT_OF_DEVICE_MEMORY : VK_SUCCESS;
@@ -209,7 +253,7 @@ namespace
         d.vkd.BeginCommandBuffer =
             +[](VkCommandBuffer, const VkCommandBufferBeginInfo*) { return ++calls == failAt ? VK_ERROR_OUT_OF_DEVICE_MEMORY : VK_SUCCESS; };
         d.vkd.EndCommandBuffer = +[](VkCommandBuffer) { return ++calls == failAt ? VK_ERROR_OUT_OF_DEVICE_MEMORY : VK_SUCCESS; };
-        d.vkd.QueueWaitIdle    = +[](VkQueue) { return drainResult; };
+        d.vkd.QueueWaitIdle    = +[](VkQueue) { return ++drainCall == failDrainAt ? VK_ERROR_OUT_OF_DEVICE_MEMORY : drainResult; };
         d.vkd.DeviceWaitIdle   = +[](VkDevice) { return drainResult; };
         d.vkd.QueueSubmit      = +[](VkQueue, uint32_t, const VkSubmitInfo*, VkFence) { return VK_SUCCESS; };
 #define NOOP(name) d.vkd.name = &Mock<decltype(d.vkd.name)>::noop
@@ -247,6 +291,14 @@ int main()
         assert(!handoff(device->device, handle, VK_COLOR_SPACE_HDR10_HLG_EXT));
         assert(handoff(device->device, handle, VK_COLOR_SPACE_HDR10_ST2084_EXT));
         assert(swapchain->hdr());
+        const auto precision = &vkBasalt::makoSetSwapchainHdrPrecisionV1;
+        assert(precision(device->device, handle, VK_TRUE));
+        assert(swapchain->hdrReducedPrecision && swapchain->hdrPrecisionRevision == 1);
+        assert(precision(device->device, handle, VK_TRUE) && swapchain->hdrPrecisionRevision == 1);
+        assert(!precision(device->device, handle, 2));
+        assert(!precision(VK_NULL_HANDLE, handle, VK_FALSE));
+        assert(precision(device->device, handle, VK_FALSE) && !swapchain->hdrReducedPrecision);
+
         swapchain->fakeImages.push_back(handleFromValue<VkImage>(21));
         assert(!handoff(device->device, handle, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR));
         swapchain->fakeImages.clear();
@@ -325,63 +377,162 @@ int main()
             d.vkd.DestroyImage(d.device, image, nullptr);
         d.vkd.FreeMemory(d.device, memory, nullptr);
     });
+    // Confirmed colour space, not bit depth, selects the HDR specialization.
+    vkBasalt::pConfig = std::make_shared<vkBasalt::Config>();
+    failAt = 0;
+    for (auto color : {VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, VK_COLOR_SPACE_HDR10_ST2084_EXT,
+                      VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT})
+    {
+        vkBasalt::LogicalSwapchain swapchain{};
+        swapchain.pLogicalDevice = &d;
+        swapchain.colorSpace = color;
+        swapchain.format = color == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT
+            ? VK_FORMAT_R16G16B16A16_SFLOAT : VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+        swapchain.imageExtent = {320, 240};
+        for (const auto& name : {"cas", "dls"})
+        {
+            fragmentSpecializations.clear();
+            {
+                auto effect = vkBasalt::createConfiguredEffect(&swapchain, name,
+                    {VK_NULL_HANDLE}, {VK_NULL_HANDLE}, &config,
+                    swapchain.effectFormat(), swapchain.effectFormat());
+                assert(fragmentSpecializations == std::vector<VkBool32>{swapchain.hdr() ? VK_TRUE : VK_FALSE});
+            }
+            assert(live.empty());
+        }
+    }
+    exercise([&] { vkBasalt::CasEffect effect(&d, VK_FORMAT_A2B10G10R10_UNORM_PACK32,
+        {320, 240}, {VK_NULL_HANDLE}, {VK_NULL_HANDLE}, &config, VK_FORMAT_R16G16B16A16_SFLOAT, true); });
+    exercise([&] { vkBasalt::DlsEffect effect(&d, VK_FORMAT_R16G16B16A16_SFLOAT,
+        {320, 240}, {VK_NULL_HANDLE}, {VK_NULL_HANDLE}, &config, true); });
+
     // Every allocation/recording failure must preserve the real previous graph.
     const auto root = std::filesystem::temp_directory_path() / ("vkbasalt-fault-" + std::to_string(getpid()));
     std::filesystem::create_directories(root);
     std::ofstream(root / "Tone.fx") << R"(
 void VS(uint id : SV_VertexID, out float4 pos : SV_Position) { pos = float4(0,0,0,1); }
-float4 PS(float4 pos : SV_Position) : SV_Target { return float4(1,0,0,1); }
-technique Tone { pass { VertexShader = VS; PixelShader = PS; } }
+texture Input : COLOR;
+sampler InputSampler { Texture = Input; };
+float4 PS(float4 pos : SV_Position) : SV_Target { return tex2D(InputSampler, pos.xy) * float4(.98,.99,1,1); }
+technique Tone {
+    pass { VertexShader = VS; PixelShader = PS; }
+    pass { VertexShader = VS; PixelShader = PS; }
+    pass { VertexShader = VS; PixelShader = PS; }
+}
 )";
-    std::ofstream(root / "vkBasalt.conf") << "effects = CustomTone:cas\nCustomTone = \"" << (root / "Tone.fx").string() << "\"\n";
-    setenv("VKBASALT_CONFIG_FILE", (root / "vkBasalt.conf").c_str(), 1);
-    vkBasalt::pConfig = std::make_shared<vkBasalt::Config>();
     size_t total = 0;
-    for (auto color : {VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, VK_COLOR_SPACE_HDR10_ST2084_EXT,
-                       VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT})
+    for (const std::string selection : {"CustomTone:cas", "CustomTone"})
     {
-        total = 0;
-        for (size_t failure = 0; failure <= total; ++failure)
+        std::ofstream(root / "vkBasalt.conf") << "effects = " << selection << "\nCustomTone = \"" << (root / "Tone.fx").string() << "\"\n";
+        setenv("VKBASALT_CONFIG_FILE", (root / "vkBasalt.conf").c_str(), 1);
+        vkBasalt::pConfig = std::make_shared<vkBasalt::Config>();
+        for (const bool reduced : {false, true})
+        for (auto color : {VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, VK_COLOR_SPACE_HDR10_ST2084_EXT,
+                           VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT})
         {
-            commandSlot = 0;
-            calls       = 0;
-            failAt      = 0;
-            vkBasalt::LogicalSwapchain swapchain{};
-            swapchain.pLogicalDevice                       = &d;
-            swapchain.colorSpace                           = color;
-            swapchain.format                               = color == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT
-                ? VK_FORMAT_R16G16B16A16_SFLOAT : color == VK_COLOR_SPACE_HDR10_ST2084_EXT
-                ? VK_FORMAT_A2B10G10R10_UNORM_PACK32 : VK_FORMAT_B8G8R8A8_UNORM;
-            swapchain.imageExtent                          = {320, 240};
-            swapchain.swapchainCreateInfo.imageFormat      = swapchain.format;
-            swapchain.swapchainCreateInfo.imageExtent      = swapchain.imageExtent;
-            swapchain.swapchainCreateInfo.imageArrayLayers = 1;
-            swapchain.imageCount                           = 2;
-            swapchain.images                               = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-            swapchain.fakeImages                           = swapchain.images;
-            d.supportsMutableFormat                        = true;
-            auto previous                                  = vkBasalt::buildEffectGraph(&swapchain, {"cas"});
-            swapchain.activeEffectGraph                    = previous;
-            swapchain.effectGraphs["cas"]                  = previous;
-            swapchain.effectGraphs[""]                     = vkBasalt::buildEffectGraph(&swapchain, {});
-            const auto originalResources                   = live;
-            calls                                          = 0;
-            failAt                                         = failure;
-            swapchain.effectSelectionRevision              = UINT64_MAX;
-            vkBasalt::updateLiveEffectGraph(&swapchain);
-            if (failure == 0)
+            total = 0;
+            for (size_t failure = 0; failure <= total; ++failure)
             {
-                total = calls;
-                assert(swapchain.activeEffectGraph != previous);
+                commandSlot = 0;
+                calls       = 0;
+                failAt      = 0;
+                vkBasalt::LogicalSwapchain swapchain{};
+                swapchain.pLogicalDevice                       = &d;
+                swapchain.colorSpace                           = color;
+                swapchain.format                               = color == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT
+                    ? VK_FORMAT_R16G16B16A16_SFLOAT : color == VK_COLOR_SPACE_HDR10_ST2084_EXT
+                    ? VK_FORMAT_A2B10G10R10_UNORM_PACK32 : VK_FORMAT_B8G8R8A8_UNORM;
+                swapchain.imageExtent                          = {320, 240};
+                swapchain.swapchainCreateInfo.imageFormat      = swapchain.format;
+                swapchain.swapchainCreateInfo.imageExtent      = swapchain.imageExtent;
+                swapchain.swapchainCreateInfo.imageArrayLayers = 1;
+                swapchain.imageCount                           = 2;
+                swapchain.images                               = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+                swapchain.fakeImages                           = swapchain.images;
+                d.supportsMutableFormat                        = true;
+                auto previous                                  = vkBasalt::buildEffectGraph(&swapchain, {"cas"});
+                swapchain.activeEffectGraph                    = previous;
+                swapchain.effectGraphs["cas"]                  = previous;
+                swapchain.effectGraphs[""]                     = vkBasalt::buildEffectGraph(&swapchain, {});
+                swapchain.hdrReducedPrecision = reduced;
+                swapchain.hdrPrecisionRevision = reduced;
+                const auto originalResources                   = live;
+                calls                                          = 0;
+                failAt                                         = failure;
+                swapchain.effectSelectionRevision              = UINT64_MAX;
+                imageViewFormats.clear();
+                sampledOutputDependencies = 0;
+                vkBasalt::updateLiveEffectGraph(&swapchain);
+                if (failure == 0)
+                {
+                    total = calls;
+                    assert(swapchain.activeEffectGraph != previous);
+                    assert(sampledOutputDependencies >= 3);
+                    if (color == VK_COLOR_SPACE_HDR10_ST2084_EXT) {
+                        // Two views for each of two direct HDR10 input images,
+                        // then float output views; no graph-boundary copy.
+                        assert(imageViewFormats.size() > 4);
+                        for (size_t i = 0; i < 4; ++i)
+                            assert(imageViewFormats[i] == swapchain.format);
+                        assert(imageViewFormats[4] == swapchain.effectFormat(reduced));
+                        const bool directCompact = reduced && selection == "CustomTone";
+                        assert(swapchain.activeEffectGraph->effects.size() == (directCompact ? 1u : 2u));
+                        assert(swapchain.activeEffectGraph->intermediateImageSets.size() == (directCompact ? 0u : 1u));
+                    }
+                }
+                else
+                {
+                    assert(swapchain.activeEffectGraph == previous);
+                    assert(live == originalResources);
+                    assert(swapchain.activeEffectGraph->intermediateImageSets.size() == swapchain.intermediateCount({"cas"}));
+                }
+                if (failure == 0 && reduced && swapchain.hdr()) {
+                    // No config revision or effect selection change: precision alone
+                    // must atomically rebuild, and an identical request is inert.
+                    const auto compact = swapchain.activeEffectGraph;
+                    assert(compact->workingFormat == VK_FORMAT_A2B10G10R10_UNORM_PACK32);
+                    swapchain.hdrReducedPrecision = false;
+                    ++swapchain.hdrPrecisionRevision;
+                    vkBasalt::updateLiveEffectGraph(&swapchain);
+                    assert(swapchain.activeEffectGraph != compact);
+                    assert(swapchain.activeEffectGraph->workingFormat == VK_FORMAT_R16G16B16A16_SFLOAT);
+                    const auto restored = swapchain.activeEffectGraph;
+                    const auto count = calls;
+                    vkBasalt::updateLiveEffectGraph(&swapchain);
+                    assert(swapchain.activeEffectGraph == restored && calls == count);
+                    // A compact format lacking a required feature must keep the
+                    // existing graph, including inherited STORAGE image usage.
+                    swapchain.hdrReducedPrecision = true;
+                    for (auto missing : {VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT,
+                                         VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT}) {
+                        missingFormatFeatures = missing;
+                        swapchain.swapchainCreateInfo.imageUsage |= VK_IMAGE_USAGE_STORAGE_BIT;
+                        assert(vkBasalt::requestedEffectFormat(&swapchain) == VK_FORMAT_R16G16B16A16_SFLOAT);
+                    }
+                    missingFormatFeatures = 0;
+                    // Multiple failed final drains at one config revision must
+                    // retain distinct candidates until a later successful drain.
+                    for (int attempt = 0; attempt < 2; ++attempt) {
+                        swapchain.hdrPrecisionRevision += 2; // off/on between presents
+                        drainCall = 0;
+                        failDrainAt = 2;
+                        const auto held = live;
+                        vkBasalt::updateLiveEffectGraph(&swapchain);
+                        assert(swapchain.activeEffectGraph == restored);
+                        assert(swapchain.effectGraphs.size() == size_t(3 + attempt));
+                        for (const auto handle : held) assert(live.count(handle));
+                        assert(live.size() > held.size());
+                    }
+                    failDrainAt = 0;
+                    swapchain.hdrPrecisionRevision += 2;
+                    vkBasalt::updateLiveEffectGraph(&swapchain);
+                    assert(swapchain.activeEffectGraph != restored);
+                    assert(swapchain.activeEffectGraph->workingFormat == VK_FORMAT_A2B10G10R10_UNORM_PACK32);
+                    assert(swapchain.effectGraphs.size() == 2);
+                }
+                swapchain.destroy();
+                assert(live.empty());
             }
-            else
-            {
-                assert(swapchain.activeEffectGraph == previous);
-                assert(live == originalResources);
-                assert(swapchain.intermediateImageSets.size() == swapchain.intermediateCount({"cas"}));
-            }
-            swapchain.destroy();
-            assert(live.empty());
         }
     }
     // Startup allocation errors return a VkResult; no exception or null graph

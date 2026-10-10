@@ -2,6 +2,8 @@
 
 namespace vkBasalt
 {
+    EffectGraph::~EffectGraph() { if (device) destroy(device); }
+
     void EffectGraph::destroy(LogicalDevice* pLogicalDevice)
     {
         if (!commandBuffers.empty())
@@ -13,6 +15,13 @@ namespace vkBasalt
             commandBuffers.clear();
         }
         effects.clear();
+        for (const auto& images : intermediateImageSets)
+            for (const auto image : images)
+                pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, image, nullptr);
+        for (const auto memory : intermediateImageMemories)
+            pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, memory, nullptr);
+        intermediateImageSets.clear();
+        intermediateImageMemories.clear();
     }
 
     void LogicalSwapchain::destroy()
@@ -24,14 +33,6 @@ namespace vkBasalt
                 graph->destroy(pLogicalDevice);
             effectGraphs.clear();
             Logger::debug("after free commandbuffer");
-
-            for (const auto& images : intermediateImageSets)
-            {
-                for (const auto image : images)
-                    pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, image, nullptr);
-            }
-            for (const auto memory : intermediateImageMemories)
-                pLogicalDevice->vkd.FreeMemory(pLogicalDevice->device, memory, nullptr);
 
             for (const auto image : nonMutableOutputImages)
                 pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, image, nullptr);
@@ -47,8 +48,6 @@ namespace vkBasalt
                 pLogicalDevice->vkd.DestroySemaphore(pLogicalDevice->device, semaphore, nullptr);
             Logger::debug("after DestroySemaphore");
         }
-        intermediateImageSets.clear();
-        intermediateImageMemories.clear();
         nonMutableOutputImages.clear();
         semaphores.clear();
         images.clear();

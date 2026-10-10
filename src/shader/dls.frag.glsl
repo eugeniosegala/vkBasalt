@@ -21,6 +21,8 @@
 */
 
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "hdr_sharpen.glsl"
 
 layout(set=0, binding=0) uniform sampler2D img;
 
@@ -39,7 +41,8 @@ layout(location = 0) out vec4 fragColor;
 float GetLumaComponents(float r, float g, float b)
 {
     // Y from JPEG spec
-    return 0.299 * r + 0.587 * g + 0.114 * b;
+    return hdrSharpening ? 0.2627 * r + 0.6780 * g + 0.0593 * b
+                         : 0.299 * r + 0.587 * g + 0.114 * b;
 }
 
 float GetLuma(vec4 p)
@@ -78,6 +81,20 @@ void main()
     vec4 f = textureLod0Offset(img, textureCoord, ivec2( 1,  1));
     vec4 g = textureLod0Offset(img, textureCoord, ivec2(-1,  1));
     vec4 h = textureLod0Offset(img, textureCoord, ivec2( 1, -1));
+
+    vec3 originalPq = x.rgb;
+    float hdrRange = 1.0;
+    if (hdrSharpening)
+    {
+        a.rgb = sharpenCode(a.rgb); b.rgb = sharpenCode(b.rgb); c.rgb = sharpenCode(c.rgb);
+        d.rgb = sharpenCode(d.rgb); e.rgb = sharpenCode(e.rgb); f.rgb = sharpenCode(f.rgb);
+        g.rgb = sharpenCode(g.rgb); h.rgb = sharpenCode(h.rgb); x.rgb = sharpenCode(x.rgb);
+        hdrRange = sharpenRange(max(max(max(a.rgb, b.rgb), max(c.rgb, d.rgb)), max(max(e.rgb, f.rgb), max(max(g.rgb, h.rgb), x.rgb))));
+        a.rgb = a.rgb / hdrRange; b.rgb = b.rgb / hdrRange; c.rgb = c.rgb / hdrRange;
+        d.rgb = d.rgb / hdrRange; e.rgb = e.rgb / hdrRange; f.rgb = f.rgb / hdrRange;
+        g.rgb = g.rgb / hdrRange; h.rgb = h.rgb / hdrRange; x.rgb = x.rgb / hdrRange;
+    }
+    vec3 centerCode = x.rgb;
 
     float lx = GetLuma(x);
 
@@ -151,5 +168,7 @@ void main()
     x.y += delta;
     x.z += delta;
 
+    if (hdrSharpening)
+        x.rgb = mix(sharpenPq(clamp(x.rgb, 0.0, 1.0), hdrRange), originalPq, equal(x.rgb, centerCode));
     fragColor = x;
 }

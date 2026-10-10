@@ -28,16 +28,21 @@ namespace vkBasalt
                          std::vector<VkImage> inputImages,
                          std::vector<VkImage> outputImages,
                          Config*              pConfig,
-                         VkFormat             inputFormat)
+                         VkFormat             inputFormat,
+                         bool                 hdr)
     {
 
         vertexCode   = full_screen_triangle_vert;
         fragmentCode = cas_frag;
 
         pVertexSpecInfo   = nullptr;
-        pFragmentSpecInfo = nullptr;
+        VkBool32 hdrValue = hdr;
+        VkSpecializationMapEntry entry{0, 0, sizeof(hdrValue)};
+        VkSpecializationInfo info{1, &entry, sizeof(hdrValue), &hdrValue};
+        pFragmentSpecInfo = &info;
 
         init(pLogicalDevice, format, imageExtent, inputImages, outputImages, pConfig, sizeof(CasSettings), inputFormat);
+        pFragmentSpecInfo = nullptr;
         appliedConfigRevisions.assign(inputImages.size(), std::numeric_limits<uint64_t>::max());
     }
     void CasEffect::updateEffect(uint32_t imageIndex)

@@ -103,19 +103,21 @@ namespace vkBasalt
             Logger::info("reloaded live options from " + pConfig->configFilePath());
     }
 
-    void ensureIntermediateImageSets(LogicalSwapchain* pLogicalSwapchain, const size_t count)
+    void ensureIntermediateImageSets(LogicalSwapchain* pLogicalSwapchain, EffectGraph& graph, const size_t count)
     {
-        while (pLogicalSwapchain->intermediateImageSets.size() < count)
+        graph.intermediateImageSets.reserve(count);
+        graph.intermediateImageMemories.reserve(count);
+        while (graph.intermediateImageSets.size() < count)
         {
             VkDeviceMemory memory = VK_NULL_HANDLE;
             auto imageInfo = pLogicalSwapchain->swapchainCreateInfo;
-            imageInfo.imageFormat = pLogicalSwapchain->effectFormat();
+            imageInfo.imageFormat = graph.workingFormat;
             auto images = createFakeSwapchainImages(pLogicalSwapchain->pLogicalDevice,
                                                     imageInfo,
                                                     pLogicalSwapchain->imageCount,
                                                     memory);
-            pLogicalSwapchain->intermediateImageSets.push_back(std::move(images));
-            pLogicalSwapchain->intermediateImageMemories.push_back(memory);
+            graph.intermediateImageSets.push_back(std::move(images));
+            graph.intermediateImageMemories.push_back(memory);
             Logger::info("allocated a private image set for live effect chaining");
         }
     }
@@ -137,11 +139,13 @@ namespace vkBasalt
                                                    const std::vector<VkImage>& outputImages,
                                                    Config* effectConfig,
                                                    VkFormat inputFormat,
-                                                   VkFormat outputFormat)
+                                                   VkFormat outputFormat,
+                                                   VkFormat workingFormat = VK_FORMAT_UNDEFINED)
     {
         LogicalDevice* pLogicalDevice = pLogicalSwapchain->pLogicalDevice;
-        const VkFormat unormFormat = convertToUNORM(pLogicalSwapchain->effectFormat());
-        const VkFormat srgbFormat = convertToSRGB(pLogicalSwapchain->effectFormat());
+        if (workingFormat == VK_FORMAT_UNDEFINED) workingFormat = pLogicalSwapchain->effectFormat();
+        const VkFormat unormFormat = convertToUNORM(workingFormat);
+        const VkFormat srgbFormat = convertToSRGB(workingFormat);
 
         if (effectName == "fxaa")
             return std::make_shared<FxaaEffect>(
@@ -149,7 +153,7 @@ namespace vkBasalt
         if (effectName == "cas")
             return std::make_shared<CasEffect>(
                 pLogicalDevice, convertToUNORM(outputFormat), pLogicalSwapchain->imageExtent,
-                inputImages, outputImages, pConfig.get(), convertToUNORM(inputFormat));
+                inputImages, outputImages, pConfig.get(), convertToUNORM(inputFormat), pLogicalSwapchain->hdr());
         if (effectName == "deband" || effectName == "makoDeband")
             return std::make_shared<DebandEffect>(
                 pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get());
@@ -161,16 +165,35 @@ namespace vkBasalt
                 pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get());
         if (effectName == "dls")
             return std::make_shared<DlsEffect>(
-                pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get());
+                pLogicalDevice, convertToUNORM(outputFormat), pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get(),
+                pLogicalSwapchain->hdr(), convertToUNORM(inputFormat));
         auto module = compileReshadeModule(*effectConfig, effectName, pLogicalSwapchain->imageExtent,
                                            unormFormat == VK_FORMAT_A2R10G10B10_UNORM_PACK32);
         return std::make_shared<ReshadeEffect>(pLogicalDevice,
-                                               pLogicalSwapchain->effectFormat(),
+                                               workingFormat,
                                                pLogicalSwapchain->imageExtent,
                                                inputImages,
                                                outputImages,
                                                effectConfig,
-                                               effectName, std::move(module));
+                                               effectName, std::move(module), inputFormat);
+    }
+
+    VkFormat requestedEffectFormat(LogicalSwapchain* swapchain) {
+        if (!swapchain->hdr() || !swapchain->hdrReducedPrecision)
+            return swapchain->effectFormat();
+        VkFormatProperties properties{};
+        auto* device = swapchain->pLogicalDevice;
+        device->vki.GetPhysicalDeviceFormatProperties(device->physicalDevice,
+            VK_FORMAT_A2B10G10R10_UNORM_PACK32, &properties);
+        VkFormatFeatureFlags required = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+            VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
+            VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT |
+            VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
+        if (swapchain->swapchainCreateInfo.imageUsage & VK_IMAGE_USAGE_STORAGE_BIT)
+            required |= VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
+        const bool supported = (properties.optimalTilingFeatures & required) == required;
+        if (!supported) Logger::warn("compact HDR buffers unsupported; retaining RGBA16F");
+        return swapchain->effectFormat(supported);
     }
 
     std::shared_ptr<EffectGraph> buildEffectGraph(LogicalSwapchain* pLogicalSwapchain,
@@ -179,6 +202,8 @@ namespace vkBasalt
         CheckedConstruction checked;
         const auto key = effectGraphKey(effectNames);
         auto graph = std::make_shared<EffectGraph>();
+        graph->device = pLogicalSwapchain->pLogicalDevice;
+        graph->workingFormat = requestedEffectFormat(pLogicalSwapchain);
         graph->config = std::make_shared<Config>(*pConfig);
         graph->effectNames = effectNames;
         LogicalDevice* pLogicalDevice = pLogicalSwapchain->pLogicalDevice;
@@ -194,20 +219,20 @@ namespace vkBasalt
         }
         else
         {
-            ensureIntermediateImageSets(pLogicalSwapchain, pLogicalSwapchain->intermediateCount(effectNames));
+            ensureIntermediateImageSets(pLogicalSwapchain, *graph, pLogicalSwapchain->intermediateCount(effectNames, graph->workingFormat));
             ensureNonMutableOutputImages(pLogicalSwapchain);
             const auto& finalImages = pLogicalDevice->supportsMutableFormat
                                           ? pLogicalSwapchain->images
                                           : pLogicalSwapchain->nonMutableOutputImages;
 
             const bool inputPass = pLogicalSwapchain->needsHdrInputPass(effectNames);
-            const bool outputPass = pLogicalSwapchain->needsHdrOutputPass(effectNames);
+            const bool outputPass = pLogicalSwapchain->needsHdrOutputPass(effectNames, graph->workingFormat);
             const bool linear = pLogicalSwapchain->colorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT;
             if (inputPass) {
                 graph->effects.push_back(std::make_shared<HdrEffect>(pLogicalDevice,
-                    pLogicalSwapchain->format, pLogicalSwapchain->effectFormat(),
+                    pLogicalSwapchain->format, graph->workingFormat,
                     pLogicalSwapchain->imageExtent, pLogicalSwapchain->fakeImages,
-                    pLogicalSwapchain->intermediateImageSets[0], graph->config.get(), linear ? 1 : 0));
+                    graph->intermediateImageSets[0], graph->config.get(), linear ? 1 : 0));
             }
             const size_t stages = effectNames.size() + inputPass + outputPass;
             for (size_t i = 0; i < effectNames.size(); ++i) {
@@ -215,18 +240,18 @@ namespace vkBasalt
                 const bool first = stage == 0;
                 const bool last = stage + 1 == stages;
                 const auto& inputImages = first ? pLogicalSwapchain->fakeImages
-                    : pLogicalSwapchain->intermediateImageSets[stage - 1];
+                    : graph->intermediateImageSets[stage - 1];
                 const auto& outputImages = last ? finalImages
-                    : pLogicalSwapchain->intermediateImageSets[stage];
+                    : graph->intermediateImageSets[stage];
                 graph->effects.push_back(createConfiguredEffect(pLogicalSwapchain, effectNames[i],
                     inputImages, outputImages, graph->config.get(),
-                    first ? pLogicalSwapchain->format : pLogicalSwapchain->effectFormat(),
-                    last ? pLogicalSwapchain->format : pLogicalSwapchain->effectFormat()));
+                    first ? pLogicalSwapchain->format : graph->workingFormat,
+                    last ? pLogicalSwapchain->format : graph->workingFormat, graph->workingFormat));
             }
             if (outputPass) {
                 graph->effects.push_back(std::make_shared<HdrEffect>(pLogicalDevice,
-                    pLogicalSwapchain->effectFormat(), pLogicalSwapchain->format,
-                    pLogicalSwapchain->imageExtent, pLogicalSwapchain->intermediateImageSets[stages - 2],
+                    graph->workingFormat, pLogicalSwapchain->format,
+                    pLogicalSwapchain->imageExtent, graph->intermediateImageSets[stages - 2],
                     finalImages, graph->config.get(), linear ? 2 : 0));
             }
 
@@ -248,33 +273,25 @@ namespace vkBasalt
         ScopeExit rollback([&] { graph->destroy(pLogicalDevice); });
         graph->commandBuffers = allocateCommandBuffer(pLogicalDevice, pLogicalSwapchain->imageCount);
         writeCommandBuffers(pLogicalDevice, graph->effects, depthImage, depthImageView, depthFormat, graph->commandBuffers);
-        Logger::info("prepared effect graph: " + (key.empty() ? std::string("off") : key));
+        Logger::info("prepared effect graph: " + (key.empty() ? std::string("off") : key) +
+            "; working_format=" + std::to_string(graph->workingFormat));
         rollback.release();
         return graph;
-    }
-
-    void trimIntermediateImageSets(LogicalSwapchain* swapchain, size_t count)
-    {
-        auto* device = swapchain->pLogicalDevice;
-        while (swapchain->intermediateImageSets.size() > count)
-        {
-            for (auto image : swapchain->intermediateImageSets.back())
-                device->vkd.DestroyImage(device->device, image, nullptr);
-            device->vkd.FreeMemory(device->device, swapchain->intermediateImageMemories.back(), nullptr);
-            swapchain->intermediateImageSets.pop_back();
-            swapchain->intermediateImageMemories.pop_back();
-        }
     }
 
     void updateLiveEffectGraph(LogicalSwapchain* swapchain)
     {
         const uint64_t revision = pConfig->revision();
-        if (swapchain->effectSelectionRevision == revision || !swapchain->activeEffectGraph)
+        if ((swapchain->effectSelectionRevision == revision &&
+             swapchain->effectPrecisionRevision == swapchain->hdrPrecisionRevision) || !swapchain->activeEffectGraph)
             return;
 
         const auto requested = pConfig->getOption<std::vector<std::string>>("effects", {"cas"});
         const auto& active = swapchain->activeEffectGraph;
-        if (requested == active->effectNames && (requested.empty() || !pConfig->effectOptionsChanged(*active->config)))
+        const bool precisionChanged = requestedEffectFormat(swapchain) != active->workingFormat;
+        swapchain->effectPrecisionRevision = swapchain->hdrPrecisionRevision;
+        if (requested == active->effectNames && (requested.empty() ||
+                (!precisionChanged && !pConfig->effectOptionsChanged(*active->config))))
         {
             swapchain->effectSelectionRevision = revision;
             return;
@@ -309,7 +326,6 @@ namespace vkBasalt
             // Do not recompile the same bad edit on every present. A later
             // configuration revision can retry; the running graph is unchanged.
             swapchain->effectSelectionRevision = revision;
-            trimIntermediateImageSets(swapchain, swapchain->intermediateCount(active->effectNames));
             Logger::warn(std::string("live effect update rejected; keeping previous graph: ") + error.what());
             return;
         }
@@ -320,7 +336,8 @@ namespace vkBasalt
         {
             // A device/queue failure cannot establish safe destruction. Leave
             // the candidate owned until swapchain teardown and retry later.
-            swapchain->effectGraphs.emplace("pending/" + std::to_string(revision), candidate);
+            swapchain->effectGraphs.emplace("pending/" + std::to_string(revision) + "/" +
+                std::to_string(swapchain->hdrPrecisionRevision), candidate);
             swapchain->effectSelectionRevision = revision;
             Logger::warn("could not commit the prepared live effect graph");
             return;
@@ -340,7 +357,6 @@ namespace vkBasalt
             ++retiredGraphs;
         }
         swapchain->effectGraphs[key] = candidate;
-        trimIntermediateImageSets(swapchain, swapchain->intermediateCount(requested));
         Logger::info("activated live effect graph: " + (key.empty() ? std::string("off") : key));
         if (retiredGraphs > 0)
             Logger::info("retired " + std::to_string(retiredGraphs) + " inactive live effect graph(s)");
@@ -699,6 +715,22 @@ namespace vkBasalt
         return VK_TRUE;
     }
 
+    // Private MAKO ABI v1. A live request is applied by the existing graph
+    // transaction; immutable application formats and colour spaces stay intact.
+    VkBool32 VKAPI_CALL makoSetSwapchainHdrPrecisionV1(VkDevice device,
+            VkSwapchainKHR swapchain, VkBool32 reduced) {
+        scoped_lock l(globalLock);
+        const auto found = swapchainMap.find(swapchain);
+        if (found == swapchainMap.end() || found->second->pLogicalDevice->device != device ||
+                (reduced != VK_FALSE && reduced != VK_TRUE)) return VK_FALSE;
+        auto& state = *found->second;
+        if (state.hdrReducedPrecision != static_cast<bool>(reduced)) {
+            state.hdrReducedPrecision = reduced;
+            ++state.hdrPrecisionRevision;
+        }
+        return VK_TRUE;
+    }
+
     VKAPI_ATTR VkResult VKAPI_CALL vkBasalt_GetSwapchainImagesKHR(VkDevice       device,
                                                                   VkSwapchainKHR swapchain,
                                                                   uint32_t*      pCount,
@@ -752,10 +784,10 @@ namespace vkBasalt
             }
             catch (const std::exception& error)
             {
-                trimIntermediateImageSets(pLogicalSwapchain, 0);
                 Logger::warn(std::string("initial effect graph rejected; using passthrough: ") + error.what());
             }
             pLogicalSwapchain->effectSelectionRevision = pConfig->revision();
+            pLogicalSwapchain->effectPrecisionRevision = pLogicalSwapchain->hdrPrecisionRevision;
             pLogicalSwapchain->semaphores = createSemaphores(pLogicalDevice, pLogicalSwapchain->imageCount);
             Logger::debug("created semaphores");
             Logger::trace("vkGetSwapchainImagesKHR");
@@ -1107,6 +1139,8 @@ extern "C"
             vkBasalt::pConfig = std::shared_ptr<vkBasalt::Config>(new vkBasalt::Config());
         }
 
+        if (!std::strcmp(pName, "makoSetSwapchainHdrPrecisionV1"))
+            return reinterpret_cast<PFN_vkVoidFunction>(&vkBasalt::makoSetSwapchainHdrPrecisionV1);
         if (!std::strcmp(pName, "makoSetSwapchainColorSpaceV1"))
             return reinterpret_cast<PFN_vkVoidFunction>(&vkBasalt::makoSetSwapchainColorSpaceV1);
         INTERCEPT_CALLS
@@ -1124,6 +1158,8 @@ extern "C"
             vkBasalt::pConfig = std::shared_ptr<vkBasalt::Config>(new vkBasalt::Config());
         }
 
+        if (!std::strcmp(pName, "makoSetSwapchainHdrPrecisionV1"))
+            return reinterpret_cast<PFN_vkVoidFunction>(&vkBasalt::makoSetSwapchainHdrPrecisionV1);
         if (!std::strcmp(pName, "makoSetSwapchainColorSpaceV1"))
             return reinterpret_cast<PFN_vkVoidFunction>(&vkBasalt::makoSetSwapchainColorSpaceV1);
         INTERCEPT_CALLS

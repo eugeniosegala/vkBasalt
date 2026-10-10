@@ -18,6 +18,7 @@ shader_src = [
 glsl_compiler = find_program('glslangValidator')
 glsl_generator = generator(glsl_compiler,
     output    : [ '@BASENAME@.h' ],
-    arguments : [ '-V', '-x', '@INPUT@', '-o', '@OUTPUT@' ])
+    depfile   : '@BASENAME@.d',
+    arguments : [ '-V', '-x', '@INPUT@', '-o', '@OUTPUT@', '--depfile', '@DEPFILE@' ])
 
 shader_include = glsl_generator.process(shader_src)

@@ -33,7 +33,8 @@ namespace vkBasalt
                       std::vector<VkImage> outputImages,
                       Config*              pConfig,
                       std::string          effectName,
-                      PreparedReshadeModule compiledModule);
+                      PreparedReshadeModule compiledModule,
+                      VkFormat inputFormat = VK_FORMAT_UNDEFINED);
         void virtual applyEffect(uint32_t imageIndex, VkCommandBuffer commandBuffer) override;
         void virtual updateEffect(uint32_t imageIndex) override;
         void virtual useDepthImage(VkImageView depthImageView) override;

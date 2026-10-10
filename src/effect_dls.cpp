@@ -28,15 +28,21 @@ namespace vkBasalt
                          VkExtent2D           imageExtent,
                          std::vector<VkImage> inputImages,
                          std::vector<VkImage> outputImages,
-                         Config*              pConfig)
+                         Config*              pConfig,
+                         bool                 hdr,
+                         VkFormat             inputFormat)
     {
         vertexCode   = full_screen_triangle_vert;
         fragmentCode = dls_frag;
 
         pVertexSpecInfo   = nullptr;
-        pFragmentSpecInfo = nullptr;
+        VkBool32 hdrValue = hdr;
+        VkSpecializationMapEntry entry{0, 0, sizeof(hdrValue)};
+        VkSpecializationInfo info{1, &entry, sizeof(hdrValue), &hdrValue};
+        pFragmentSpecInfo = &info;
 
-        init(pLogicalDevice, format, imageExtent, inputImages, outputImages, pConfig, sizeof(DlsSettings));
+        init(pLogicalDevice, format, imageExtent, inputImages, outputImages, pConfig, sizeof(DlsSettings), inputFormat);
+        pFragmentSpecInfo = nullptr;
         appliedConfigRevisions.assign(inputImages.size(), std::numeric_limits<uint64_t>::max());
     }
     void DlsEffect::updateEffect(uint32_t imageIndex)

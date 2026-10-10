@@ -70,3 +70,7 @@ test('Vulkan layer version and forwarding', layer_interface_test,
 hdr_policy_test = executable('hdr_policy_test', 'hdr_policy_test.cpp',
     include_directories: [include_directories('../src'), vkBasalt_include_path])
 test('explicit HDR colour and graph lifetime', hdr_policy_test)
+
+# Analytic dense sweep, float32 evaluation, and generated-source freshness.
+test('HDR sharpening transfer accuracy', find_program('python3'),
+    args: [files('../scripts/generate-hdr-sharpen-curve.py'), '--check'])
