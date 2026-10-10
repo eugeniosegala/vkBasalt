@@ -75,6 +75,7 @@ namespace vkBasalt
         Logger::debug("created ImageViews");
 
         module = std::move(compiledModule.module);
+        depthSampling = usesReshadeDepth(module);
         VkShaderModuleCreateInfo shaderCreateInfo{};
         shaderCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
         shaderCreateInfo.codeSize = module.spirv.size() * sizeof(uint32_t);

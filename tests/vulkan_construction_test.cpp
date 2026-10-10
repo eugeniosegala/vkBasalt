@@ -113,6 +113,8 @@ namespace
             imageViewFormats.push_back(info->format);
             return Mock<PFN_vkCreateImageView>::create(device, info, allocator, view);
         };
+        CREATE(CreateFence);
+        DESTROY(DestroyFence);
         CREATE(CreateShaderModule);
         CREATE(CreateDescriptorSetLayout);
         CREATE(CreateDescriptorPool);

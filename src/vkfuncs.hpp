@@ -28,6 +28,10 @@
     FORVKFUNC(CreateCommandPool) \
     FORVKFUNC(CreateDescriptorPool) \
     FORVKFUNC(CreateDescriptorSetLayout) \
+    FORVKFUNC(CreateFence) \
+    FORVKFUNC(DestroyFence) \
+    FORVKFUNC(WaitForFences) \
+    FORVKFUNC(ResetFences) \
     FORVKFUNC(CreateFramebuffer) \
     FORVKFUNC(CreateGraphicsPipelines) \
     FORVKFUNC(CreateImage) \

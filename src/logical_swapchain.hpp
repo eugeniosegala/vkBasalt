@@ -29,8 +29,25 @@ namespace vkBasalt
 
         LogicalDevice* device = nullptr;
         VkFormat workingFormat = VK_FORMAT_UNDEFINED;
+        VkImage depthImage = VK_NULL_HANDLE;
+        bool usesDepthImage() const {
+            for (const auto& effect : effects)
+                if (effect->usesDepthImage()) return true;
+            return false;
+        }
         std::vector<std::vector<VkImage>> intermediateImageSets;
         std::vector<VkDeviceMemory> intermediateImageMemories;
+        struct DepthSubmission {
+            VkFence fence = VK_NULL_HANDLE;
+            bool pending = false;
+        };
+        std::vector<DepthSubmission> depthSubmissions;
+        void initializeDepthSubmissions(LogicalDevice*, uint32_t imageCount);
+        VkResult prepareDepthSubmission(LogicalDevice*, uint32_t index, VkFence& fence);
+        void depthSubmitted(uint32_t index) {
+            if (!depthSubmissions.empty()) depthSubmissions.at(index).pending = true;
+        }
+        VkResult waitForDepthSubmissions(LogicalDevice*);
         ~EffectGraph();
         void destroy(LogicalDevice* pLogicalDevice);
     };

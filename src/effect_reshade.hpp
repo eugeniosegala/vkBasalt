@@ -37,6 +37,7 @@ namespace vkBasalt
                       VkFormat inputFormat = VK_FORMAT_UNDEFINED);
         void virtual applyEffect(uint32_t imageIndex, VkCommandBuffer commandBuffer) override;
         void virtual updateEffect(uint32_t imageIndex) override;
+        bool usesDepthImage() const override { return depthSampling; }
         void virtual useDepthImage(VkImageView depthImageView) override;
         virtual ~ReshadeEffect();
 
@@ -84,6 +85,7 @@ namespace vkBasalt
         Config*                               pConfig;
         std::string                           effectName;
         reshadefx::module                     module;
+        bool depthSampling = false;
         std::vector<VkDeviceMemory>           textureMemory;
 
         VkFormat    inputOutputFormatUNORM;

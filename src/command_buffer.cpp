@@ -40,10 +40,17 @@ namespace vkBasalt
         beginInfo.flags            = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
         beginInfo.pInheritanceInfo = nullptr;
 
+        bool usesDepth = false;
         for (auto& effect : effects)
         {
-            effect->useDepthImage(depthImageView);
+            if (effect->usesDepthImage()) {
+                usesDepth = true;
+                effect->useDepthImage(depthImageView);
+            }
         }
+        // Colour-only shaders must not transition an unrelated game depth
+        // image, including while that image is being loaded or retired.
+        if (!usesDepth) depthImageView = VK_NULL_HANDLE;
 
         for (uint32_t i = 0; i < commandBuffers.size(); i++)
         {

@@ -24,9 +24,20 @@ namespace vkBasalt
         uint32_t                 queueFamilyIndex;
         VkCommandPool            commandPool;
         bool                     supportsMutableFormat;
-        std::vector<VkImage>     depthImages;
-        std::vector<VkFormat>    depthFormats;
-        std::vector<VkImageView> depthImageViews;
+        struct DepthImage {
+            VkImage image = VK_NULL_HANDLE;
+            VkFormat format = VK_FORMAT_UNDEFINED;
+            VkImageView view = VK_NULL_HANDLE;
+        };
+        // One record per image: creation and binding need not be adjacent or
+        // ordered, and an image can be destroyed without ever being bound.
+        std::vector<DepthImage> depthImages;
+        VkResult depthUpdateResult = VK_SUCCESS;
+        DepthImage selectedDepthImage() const {
+            for (const auto& depth : depthImages)
+                if (depth.view != VK_NULL_HANDLE) return depth;
+            return {};
+        }
         struct PendingUpload {
             VkCommandBuffer commandBuffer;
             VkBuffer buffer;

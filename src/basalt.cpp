@@ -266,13 +266,15 @@ namespace vkBasalt
             }
         }
 
-        const bool useDepth = !effectNames.empty() && !pLogicalDevice->depthImageViews.empty();
-        const VkImageView depthImageView = useDepth ? pLogicalDevice->depthImageViews[0] : VK_NULL_HANDLE;
-        const VkImage depthImage = useDepth ? pLogicalDevice->depthImages[0] : VK_NULL_HANDLE;
-        const VkFormat depthFormat = useDepth ? pLogicalDevice->depthFormats[0] : VK_FORMAT_UNDEFINED;
+        const auto depth = graph->usesDepthImage() ? pLogicalDevice->selectedDepthImage() : LogicalDevice::DepthImage{};
+        const VkImageView depthImageView = depth.view;
+        const VkImage depthImage = depth.image;
+        const VkFormat depthFormat = depth.format;
+        graph->depthImage = depthImage;
         ScopeExit rollback([&] { graph->destroy(pLogicalDevice); });
         graph->commandBuffers = allocateCommandBuffer(pLogicalDevice, pLogicalSwapchain->imageCount);
         writeCommandBuffers(pLogicalDevice, graph->effects, depthImage, depthImageView, depthFormat, graph->commandBuffers);
+        graph->initializeDepthSubmissions(pLogicalDevice, pLogicalSwapchain->imageCount);
         Logger::info("prepared effect graph: " + (key.empty() ? std::string("off") : key) +
             "; working_format=" + std::to_string(graph->workingFormat));
         rollback.release();
@@ -362,30 +364,56 @@ namespace vkBasalt
             Logger::info("retired " + std::to_string(retiredGraphs) + " inactive live effect graph(s)");
     }
 
-    void rerecordEffectGraphs(LogicalSwapchain* pLogicalSwapchain,
+    void rerecordEffectGraphs(LogicalSwapchain* swapchain,
                               const VkImage depthImage,
                               const VkImageView depthImageView,
                               const VkFormat depthFormat)
     {
-        LogicalDevice* pLogicalDevice = pLogicalSwapchain->pLogicalDevice;
-        for (auto& [key, graph] : pLogicalSwapchain->effectGraphs)
+        auto* device = swapchain->pLogicalDevice;
+        for (auto& [key, graph] : swapchain->effectGraphs)
         {
-            if (!graph->commandBuffers.empty())
-            {
-                pLogicalDevice->vkd.FreeCommandBuffers(pLogicalDevice->device,
-                                                       pLogicalDevice->commandPool,
-                                                       graph->commandBuffers.size(),
-                                                       graph->commandBuffers.data());
+            if (!graph->usesDepthImage() || graph->depthImage == depthImage)
+                continue;
+            if (device->depthUpdateResult != VK_SUCCESS)
+                return;
+            // Image destruction can come from a loading thread while the
+            // application submits on its queues. Wait only for our fences;
+            // QueueWaitIdle here would require the application's queue lock.
+            device->depthUpdateResult = graph->waitForDepthSubmissions(device);
+            if (device->depthUpdateResult != VK_SUCCESS) {
+                Logger::err("depth graph retirement failed; result=" + std::to_string(device->depthUpdateResult));
+                return;
             }
-            graph->commandBuffers = allocateCommandBuffer(pLogicalDevice, pLogicalSwapchain->imageCount);
-            const bool useDepth = !graph->effectNames.empty() && depthImageView != VK_NULL_HANDLE;
-            writeCommandBuffers(pLogicalDevice,
-                                graph->effects,
-                                useDepth ? depthImage : VK_NULL_HANDLE,
-                                useDepth ? depthImageView : VK_NULL_HANDLE,
-                                useDepth ? depthFormat : VK_FORMAT_UNDEFINED,
-                                graph->commandBuffers);
+            try {
+                CheckedConstruction checked;
+                auto commands = allocateCommandBuffer(device, swapchain->imageCount);
+                ScopeExit rollback([&] {
+                    device->vkd.FreeCommandBuffers(device->device, device->commandPool,
+                                                   commands.size(), commands.data());
+                });
+                writeCommandBuffers(device, graph->effects, depthImage, depthImageView, depthFormat, commands);
+                if (!graph->commandBuffers.empty())
+                    device->vkd.FreeCommandBuffers(device->device, device->commandPool,
+                                                   graph->commandBuffers.size(), graph->commandBuffers.data());
+                graph->commandBuffers = std::move(commands);
+                graph->depthImage = depthImage;
+                rollback.release();
+            } catch (const std::exception& error) {
+                // Descriptors may already reference the replacement. Never
+                // resubmit the previous commands after a partial rewrite.
+                device->depthUpdateResult = VK_ERROR_DEVICE_LOST;
+                Logger::err(std::string("depth graph replacement failed: ") + error.what());
+                return;
+            }
         }
+    }
+
+    void updateDepthEffectGraphs(LogicalDevice* device)
+    {
+        const auto depth = device->selectedDepthImage();
+        for (auto& [handle, swapchain] : swapchainMap)
+            if (swapchain->pLogicalDevice == device)
+                rerecordEffectGraphs(swapchain.get(), depth.image, depth.view, depth.format);
     }
 
     VkResult VKAPI_CALL vkBasalt_CreateInstance(const VkInstanceCreateInfo*  pCreateInfo,
@@ -840,6 +868,9 @@ namespace vkBasalt
 
         LogicalDevice* pLogicalDevice = deviceMap[GetKey(queue)].get();
 
+        if (pLogicalDevice->depthUpdateResult != VK_SUCCESS)
+            return pLogicalDevice->depthUpdateResult;
+
         std::vector<VkSemaphore> presentSemaphores;
         presentSemaphores.reserve(pPresentInfo->swapchainCount);
 
@@ -873,7 +904,12 @@ namespace vkBasalt
 
             presentSemaphores.push_back(pLogicalSwapchain->semaphores[index]);
 
-            VkResult vr = pLogicalDevice->vkd.QueueSubmit(pLogicalDevice->queue, 1, &submitInfo, VK_NULL_HANDLE);
+            VkFence completion = VK_NULL_HANDLE;
+            VkResult vr = selectedGraph->prepareDepthSubmission(pLogicalDevice, index, completion);
+            if (vr == VK_SUCCESS) {
+                vr = pLogicalDevice->vkd.QueueSubmit(pLogicalDevice->queue, 1, &submitInfo, completion);
+                if (vr == VK_SUCCESS) selectedGraph->depthSubmitted(index);
+            }
 
             if (vr != VK_SUCCESS)
             {
@@ -923,8 +959,8 @@ namespace vkBasalt
             VkImageCreateInfo modifiedCreateInfo = *pCreateInfo;
             modifiedCreateInfo.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
             VkResult result = pLogicalDevice->vkd.CreateImage(device, &modifiedCreateInfo, pAllocator, pImage);
-            pLogicalDevice->depthImages.push_back(*pImage);
-            pLogicalDevice->depthFormats.push_back(pCreateInfo->format);
+            if (result == VK_SUCCESS)
+                pLogicalDevice->depthImages.push_back({*pImage, pCreateInfo->format, VK_NULL_HANDLE});
 
             return result;
         }
@@ -941,36 +977,19 @@ namespace vkBasalt
         LogicalDevice* pLogicalDevice = deviceMap[GetKey(device)].get();
 
         VkResult result = pLogicalDevice->vkd.BindImageMemory(device, image, memory, memoryOffset);
-        // TODO what if the application creates more than one image before binding memory?
-        if (pLogicalDevice->depthImages.size() && image == pLogicalDevice->depthImages.back())
-        {
-            Logger::debug("before creating depth image view");
-            VkImageView depthImageView = createImageViews(pLogicalDevice,
-                                                          pLogicalDevice->depthFormats[pLogicalDevice->depthImages.size() - 1],
-                                                          {image},
-                                                          VK_IMAGE_VIEW_TYPE_2D,
-                                                          VK_IMAGE_ASPECT_DEPTH_BIT)[0];
-
-            VkFormat depthFormat = pLogicalDevice->depthFormats[pLogicalDevice->depthImages.size() - 1];
-
-            Logger::debug("created depth image view");
-            pLogicalDevice->depthImageViews.push_back(depthImageView);
-            if (pLogicalDevice->depthImageViews.size() > 1)
-            {
-                return result;
-            }
-
-            for (auto& it : swapchainMap)
-            {
-                LogicalSwapchain* pLogicalSwapchain = it.second.get();
-                if (pLogicalSwapchain->pLogicalDevice == pLogicalDevice)
-                {
-                    if (!pLogicalSwapchain->effectGraphs.empty())
-                    {
-                        rerecordEffectGraphs(pLogicalSwapchain, image, depthImageView, depthFormat);
-                        Logger::debug("rewrote effect graph command buffers for swapchain " + convertToString(it.first));
-                    }
-                }
+        if (result != VK_SUCCESS)
+            return result;
+        const auto depth = std::find_if(pLogicalDevice->depthImages.begin(), pLogicalDevice->depthImages.end(),
+            [image](const auto& entry) { return entry.image == image; });
+        if (depth != pLogicalDevice->depthImages.end() && depth->view == VK_NULL_HANDLE) {
+            try {
+                CheckedConstruction checked;
+                depth->view = createImageViews(pLogicalDevice, depth->format, {image},
+                                               VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_DEPTH_BIT)[0];
+                updateDepthEffectGraphs(pLogicalDevice);
+            } catch (const std::exception& error) {
+                // Optional depth capture must not change a successful bind.
+                Logger::warn(std::string("depth view unavailable: ") + error.what());
             }
         }
         return result;
@@ -985,35 +1004,17 @@ namespace vkBasalt
 
         LogicalDevice* pLogicalDevice = deviceMap[GetKey(device)].get();
 
-        for (uint32_t i = 0; i < pLogicalDevice->depthImages.size(); i++)
-        {
-            if (pLogicalDevice->depthImages[i] == image)
-            {
-                pLogicalDevice->depthImages.erase(pLogicalDevice->depthImages.begin() + i);
-                // TODO what if a image gets destroyed before binding memory?
-                if (pLogicalDevice->depthImageViews.size() - 1 >= i)
-                {
-                    pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, pLogicalDevice->depthImageViews[i], nullptr);
-                    pLogicalDevice->depthImageViews.erase(pLogicalDevice->depthImageViews.begin() + i);
-                }
-                pLogicalDevice->depthFormats.erase(pLogicalDevice->depthFormats.begin() + i);
-
-                VkImageView depthImageView = pLogicalDevice->depthImageViews.size() ? pLogicalDevice->depthImageViews[0] : VK_NULL_HANDLE;
-                VkImage     depthImage     = pLogicalDevice->depthImageViews.size() ? pLogicalDevice->depthImages[0] : VK_NULL_HANDLE;
-                VkFormat    depthFormat    = pLogicalDevice->depthImageViews.size() ? pLogicalDevice->depthFormats[0] : VK_FORMAT_UNDEFINED;
-                for (auto& it : swapchainMap)
-                {
-                    LogicalSwapchain* pLogicalSwapchain = it.second.get();
-                    if (pLogicalSwapchain->pLogicalDevice == pLogicalDevice)
-                    {
-                        if (!pLogicalSwapchain->effectGraphs.empty())
-                        {
-                            rerecordEffectGraphs(pLogicalSwapchain, depthImage, depthImageView, depthFormat);
-                            Logger::debug("rewrote effect graph command buffers for swapchain " + convertToString(it.first));
-                        }
-                    }
-                }
-            }
+        const auto depth = std::find_if(pLogicalDevice->depthImages.begin(), pLogicalDevice->depthImages.end(),
+            [image](const auto& entry) { return entry.image == image; });
+        if (depth != pLogicalDevice->depthImages.end()) {
+            const auto view = depth->view;
+            pLogicalDevice->depthImages.erase(depth);
+            updateDepthEffectGraphs(pLogicalDevice);
+            // Keep the view until any shader references have been drained and
+            // removed. Unbound or modern BindImageMemory2 images have no view.
+            if (view != VK_NULL_HANDLE && (pLogicalDevice->depthUpdateResult == VK_SUCCESS ||
+                                          pLogicalDevice->depthUpdateResult == VK_ERROR_DEVICE_LOST))
+                pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, view, nullptr);
         }
 
         pLogicalDevice->vkd.DestroyImage(pLogicalDevice->device, image, pAllocator);

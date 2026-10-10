@@ -24,6 +24,28 @@ technique Tone { pass { VertexShader = VS; PixelShader = PS; } }
     vkBasalt::Config config;
     const auto valid = vkBasalt::compileReshadeModule(config, "CustomTone", {1280, 720}, false);
     assert(!valid.module.spirv.empty() && valid.module.techniques.size() == 1);
+    assert(!vkBasalt::usesReshadeDepth(valid.module));
+    const std::string depthHeader = R"(
+texture DepthTex : DEPTH;
+sampler DepthSampler { Texture = DepthTex; };
+float readDepth(float2 uv) { return tex2D(DepthSampler, uv).x; }
+float callDepth(float2 uv) { return readDepth(uv); }
+)";
+    // An unused shared helper must not make a colour-only effect own depth.
+    std::ofstream(shader) << depthHeader << source;
+    const auto colourOnly = vkBasalt::compileReshadeModule(config, "CustomTone", {1280,720}, false);
+    assert(!colourOnly.module.samplers.empty());
+    assert(!vkBasalt::usesReshadeDepth(colourOnly.module));
+    for (const auto expression : {"tex2D(DepthSampler, pos.xy).xxxx", "callDepth(pos.xy).xxxx"}) {
+        auto depthSource = source;
+        depthSource.replace(depthSource.find("float4(0.2, 0.8, 0.3, 1.0)"), std::string("float4(0.2, 0.8, 0.3, 1.0)").size(), expression);
+        std::ofstream(shader) << depthHeader << depthSource;
+        const auto sampled = vkBasalt::compileReshadeModule(config, "CustomTone", {1280,720}, true);
+        assert(vkBasalt::usesReshadeDepth(sampled.module));
+        auto malformed = sampled.module;
+        malformed.spirv.resize(6); malformed.spirv[5] = 0;
+        assert(vkBasalt::usesReshadeDepth(malformed));
+    }
     auto rejected = [&] {
         try { vkBasalt::compileReshadeModule(config, "CustomTone", {1280, 720}, false); }
         catch (const std::runtime_error&) { return true; }

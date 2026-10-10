@@ -74,3 +74,11 @@ test('explicit HDR colour and graph lifetime', hdr_policy_test)
 # Analytic dense sweep, float32 evaluation, and generated-source freshness.
 test('HDR sharpening transfer accuracy', find_program('python3'),
     args: [files('../scripts/generate-hdr-sharpen-curve.py'), '--check'])
+
+depth_lifetime_test = executable('depth_lifetime_test', 'depth_lifetime_test.cpp',
+    objects: vkBasalt_library.extract_all_objects(recursive: false),
+    link_with: keyboard_input_x11_lib, dependencies: [x11_dep, reshade_dep],
+    include_directories: [include_directories('../src'), vkBasalt_include_path])
+foreach scenario : ['colour', 'pending', 'unbound', 'out-of-order', 'failures', 'drain-failure', 'churn', 'fence-reuse', 'fence-rollback']
+    test('depth lifetime ' + scenario, depth_lifetime_test, args: [scenario])
+endforeach

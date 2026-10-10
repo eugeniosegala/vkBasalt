@@ -4,6 +4,41 @@ namespace vkBasalt
 {
     EffectGraph::~EffectGraph() { if (device) destroy(device); }
 
+    void EffectGraph::initializeDepthSubmissions(LogicalDevice* device, uint32_t count)
+    {
+        if (!usesDepthImage()) return;
+        depthSubmissions.resize(count);
+        const VkFenceCreateInfo info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        for (auto& slot : depthSubmissions)
+            ASSERT_VULKAN(device->vkd.CreateFence(device->device, &info, nullptr, &slot.fence));
+    }
+
+    VkResult EffectGraph::waitForDepthSubmissions(LogicalDevice* device)
+    {
+        for (auto& slot : depthSubmissions) {
+            if (!slot.pending) continue;
+            const auto result = device->vkd.WaitForFences(device->device, 1, &slot.fence, VK_TRUE, UINT64_MAX);
+            if (result != VK_SUCCESS) return result;
+            slot.pending = false;
+        }
+        return VK_SUCCESS;
+    }
+
+    VkResult EffectGraph::prepareDepthSubmission(LogicalDevice* device, uint32_t index, VkFence& fence)
+    {
+        fence = VK_NULL_HANDLE;
+        if (depthSubmissions.empty()) return VK_SUCCESS;
+        auto& slot = depthSubmissions.at(index);
+        if (slot.pending) {
+            const auto result = device->vkd.WaitForFences(device->device, 1, &slot.fence, VK_TRUE, UINT64_MAX);
+            if (result != VK_SUCCESS) return result;
+            slot.pending = false;
+        }
+        const auto result = device->vkd.ResetFences(device->device, 1, &slot.fence);
+        if (result == VK_SUCCESS) fence = slot.fence;
+        return result;
+    }
+
     void EffectGraph::destroy(LogicalDevice* pLogicalDevice)
     {
         if (!commandBuffers.empty())
@@ -14,6 +49,10 @@ namespace vkBasalt
                                                    commandBuffers.data());
             commandBuffers.clear();
         }
+        for (const auto& slot : depthSubmissions)
+            if (slot.fence != VK_NULL_HANDLE)
+                pLogicalDevice->vkd.DestroyFence(pLogicalDevice->device, slot.fence, nullptr);
+        depthSubmissions.clear();
         effects.clear();
         for (const auto& images : intermediateImageSets)
             for (const auto image : images)

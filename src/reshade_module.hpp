@@ -3,8 +3,11 @@
 
 #include <climits>
 #include <cstdio>
+#include <cstring>
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
+#include "reshade/spirv.hpp"
 #include "stb_image.h"
 #include "stb_image_dds.h"
 #include <memory>
@@ -16,6 +19,68 @@
 
 namespace vkBasalt
 {
+    // ReShade includes declare depth samplers and helper functions even for
+    // colour-only shaders. Only loads reachable from the rendered technique
+    // create a game-depth dependency. This runs once during construction.
+    inline bool usesReshadeDepth(const reshadefx::module& module)
+    {
+        std::unordered_set<uint32_t> depthSamplers;
+        for (const auto& sampler : module.samplers)
+            for (const auto& texture : module.textures)
+                if (texture.semantic == "DEPTH" && texture.unique_name == sampler.texture_name)
+                    depthSamplers.insert(sampler.id);
+        if (depthSamplers.empty()) return false;
+        const auto& words = module.spirv;
+        if (words.size() < 5 || words[0] != spv::MagicNumber || module.techniques.empty()) return true;
+        std::unordered_set<std::string> entries;
+        for (const auto& pass : module.techniques.front().passes) {
+            entries.insert(pass.vs_entry_point);
+            entries.insert(pass.ps_entry_point);
+        }
+        std::unordered_map<uint32_t, std::vector<uint32_t>> calls;
+        std::unordered_set<uint32_t> loads;
+        std::vector<uint32_t> pending;
+        uint32_t function = 0;
+        for (size_t i = 5; i < words.size();) {
+            const auto count = words[i] >> spv::WordCountShift;
+            const auto op = static_cast<spv::Op>(words[i] & spv::OpCodeMask);
+            if (count == 0 || count > words.size() - i) return true;
+            if (op == spv::OpEntryPoint) {
+                if (count < 4) return true;
+                const auto* name = reinterpret_cast<const char*>(&words[i + 3]);
+                const size_t capacity = (count - 3) * sizeof(uint32_t);
+                const auto* end = static_cast<const char*>(std::memchr(name, 0, capacity));
+                if (!end) return true;
+                if (entries.count(std::string(name, end))) pending.push_back(words[i + 2]);
+            } else if (op == spv::OpFunction) {
+                if (count < 5) return true;
+                function = words[i + 2];
+            } else if (op == spv::OpFunctionEnd) {
+                function = 0;
+            } else if (function && op == spv::OpFunctionCall) {
+                if (count < 4) return true;
+                calls[function].push_back(words[i + 3]);
+                for (size_t arg = 4; arg < count; ++arg)
+                    if (depthSamplers.count(words[i + arg])) loads.insert(function);
+            } else if (function && (op == spv::OpLoad || op == spv::OpAccessChain ||
+                        op == spv::OpInBoundsAccessChain || op == spv::OpPtrAccessChain || op == spv::OpCopyObject)) {
+                if (count < 4) return true;
+                if (depthSamplers.count(words[i + 3])) loads.insert(function);
+            }
+            i += count;
+        }
+        if (pending.empty()) return true;
+        std::unordered_set<uint32_t> visited;
+        while (!pending.empty()) {
+            const auto id = pending.back(); pending.pop_back();
+            if (!visited.insert(id).second) continue;
+            if (loads.count(id)) return true;
+            const auto found = calls.find(id);
+            if (found != calls.end()) pending.insert(pending.end(), found->second.begin(), found->second.end());
+        }
+        return false;
+    }
+
     struct ReshadeTexture
     {
         int width = 0;
