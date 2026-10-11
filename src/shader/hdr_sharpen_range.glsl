@@ -1,9 +1,9 @@
-// Shared local normalization keeps HDR detail above reference white without
-// clipping it into SDR. Reserve 20% of the filter range for bright edges: a
-// local maximum at 1.0 falsely looks clipped to both CAS and DLS and suppresses
-// their sharpening. At 0.8 the existing highlight guards still attenuate it.
-// Reverse this same RGB-wide scale before output; dim detail is unchanged.
+// Evaluate HDR neighbourhoods in the SDR filter's midrange, where a bright
+// local maximum is not mistaken for clipped white. A peak of 0.8 still
+// suppressed CAS/DLS detail relative to SDR even at maximum strength.
+// One reversible RGB-wide scale preserves hue and absolute HDR brightness;
+// values already below midrange retain the original SDR contrast/noise math.
 float sharpenRange(vec3 maximum)
 {
-    return max(1.0f, 1.25f * max(maximum.r, max(maximum.g, maximum.b)));
+    return max(1.0f, 2.0f * max(maximum.r, max(maximum.g, maximum.b)));
 }
