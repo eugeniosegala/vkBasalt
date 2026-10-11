@@ -82,3 +82,7 @@ depth_lifetime_test = executable('depth_lifetime_test', 'depth_lifetime_test.cpp
 foreach scenario : ['colour', 'pending', 'unbound', 'out-of-order', 'failures', 'drain-failure', 'churn', 'fence-reuse', 'fence-rollback']
     test('depth lifetime ' + scenario, depth_lifetime_test, args: [scenario])
 endforeach
+
+hdr_sharpen_range_test = executable('hdr_sharpen_range_test', 'hdr_sharpen_range_test.cpp',
+    include_directories: include_directories('../src'))
+test('HDR sharpening highlight headroom', hdr_sharpen_range_test)

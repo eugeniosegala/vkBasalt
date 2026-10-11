@@ -18,9 +18,4 @@ vec3 sharpenPq(vec3 code, float range)
     return mix(sharpenPqCurve(code), encoded, toe);
 }
 
-// Shared local normalization keeps HDR highlights above reference white rather
-// than clipping them into SDR. A single scale preserves the RGB proportions.
-float sharpenRange(vec3 maximum)
-{
-    return max(1.0, max(maximum.r, max(maximum.g, maximum.b)));
-}
+#include "hdr_sharpen_range.glsl"
