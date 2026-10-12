@@ -66,6 +66,18 @@ namespace vkBasalt
             return !hdr() ? format : reducedPrecision
                 ? VK_FORMAT_A2B10G10R10_UNORM_PACK32 : VK_FORMAT_R16G16B16A16_SFLOAT;
         }
+        VkExtent2D sharpenSourceExtent{};
+        bool setSharpenSourceExtent(VkExtent2D source) {
+            if (!hdr() || !fakeImages.empty() || !source.width || !source.height ||
+                source.width > imageExtent.width || source.height > imageExtent.height ||
+                uint64_t(source.width) * 2 < imageExtent.width ||
+                uint64_t(source.height) * 2 < imageExtent.height ||
+                uint64_t(source.width) * imageExtent.height !=
+                    uint64_t(source.height) * imageExtent.width)
+                return false;
+            sharpenSourceExtent = source;
+            return true;
+        }
         bool hdrReducedPrecision = false;
         uint64_t hdrPrecisionRevision = 0;
         uint64_t effectPrecisionRevision = 0;

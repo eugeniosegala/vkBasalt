@@ -153,7 +153,7 @@ namespace vkBasalt
         if (effectName == "cas")
             return std::make_shared<CasEffect>(
                 pLogicalDevice, convertToUNORM(outputFormat), pLogicalSwapchain->imageExtent,
-                inputImages, outputImages, pConfig.get(), convertToUNORM(inputFormat), pLogicalSwapchain->hdr());
+                inputImages, outputImages, pConfig.get(), convertToUNORM(inputFormat), pLogicalSwapchain->hdr(), pLogicalSwapchain->sharpenSourceExtent);
         if (effectName == "deband" || effectName == "makoDeband")
             return std::make_shared<DebandEffect>(
                 pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get());
@@ -166,7 +166,7 @@ namespace vkBasalt
         if (effectName == "dls")
             return std::make_shared<DlsEffect>(
                 pLogicalDevice, convertToUNORM(outputFormat), pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get(),
-                pLogicalSwapchain->hdr(), convertToUNORM(inputFormat));
+                pLogicalSwapchain->hdr(), convertToUNORM(inputFormat), pLogicalSwapchain->sharpenSourceExtent);
         auto module = compileReshadeModule(*effectConfig, effectName, pLogicalSwapchain->imageExtent,
                                            unormFormat == VK_FORMAT_A2R10G10B10_UNORM_PACK32);
         return std::make_shared<ReshadeEffect>(pLogicalDevice,
@@ -743,6 +743,17 @@ namespace vkBasalt
         return VK_TRUE;
     }
 
+    // Source-pixel footprint for the internal HDR display resize only. The
+    // immutable graph uses it for CAS/DLS, never for custom or AA effects.
+    VkBool32 VKAPI_CALL makoSetSwapchainSharpenSourceExtentV1(VkDevice device,
+            VkSwapchainKHR swapchain, uint32_t width, uint32_t height) {
+        scoped_lock l(globalLock);
+        const auto found = swapchainMap.find(swapchain);
+        if (found == swapchainMap.end() || found->second->pLogicalDevice->device != device)
+            return VK_FALSE;
+        return found->second->setSharpenSourceExtent({width, height}) ? VK_TRUE : VK_FALSE;
+    }
+
     // Private MAKO ABI v1. A live request is applied by the existing graph
     // transaction; immutable application formats and colour spaces stay intact.
     VkBool32 VKAPI_CALL makoSetSwapchainHdrPrecisionV1(VkDevice device,
@@ -1140,6 +1151,8 @@ extern "C"
             vkBasalt::pConfig = std::shared_ptr<vkBasalt::Config>(new vkBasalt::Config());
         }
 
+        if (!std::strcmp(pName, "makoSetSwapchainSharpenSourceExtentV1"))
+            return reinterpret_cast<PFN_vkVoidFunction>(&vkBasalt::makoSetSwapchainSharpenSourceExtentV1);
         if (!std::strcmp(pName, "makoSetSwapchainHdrPrecisionV1"))
             return reinterpret_cast<PFN_vkVoidFunction>(&vkBasalt::makoSetSwapchainHdrPrecisionV1);
         if (!std::strcmp(pName, "makoSetSwapchainColorSpaceV1"))
@@ -1159,6 +1172,8 @@ extern "C"
             vkBasalt::pConfig = std::shared_ptr<vkBasalt::Config>(new vkBasalt::Config());
         }
 
+        if (!std::strcmp(pName, "makoSetSwapchainSharpenSourceExtentV1"))
+            return reinterpret_cast<PFN_vkVoidFunction>(&vkBasalt::makoSetSwapchainSharpenSourceExtentV1);
         if (!std::strcmp(pName, "makoSetSwapchainHdrPrecisionV1"))
             return reinterpret_cast<PFN_vkVoidFunction>(&vkBasalt::makoSetSwapchainHdrPrecisionV1);
         if (!std::strcmp(pName, "makoSetSwapchainColorSpaceV1"))

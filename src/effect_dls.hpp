@@ -24,7 +24,8 @@ namespace vkBasalt
                   std::vector<VkImage> outputImages,
                   Config*              pConfig,
                   bool                 hdr = false,
-                  VkFormat             inputFormat = VK_FORMAT_UNDEFINED);
+                  VkFormat             inputFormat = VK_FORMAT_UNDEFINED,
+                  VkExtent2D           sourceExtent = {});
         void updateEffect(uint32_t imageIndex) override;
         ~DlsEffect();
 

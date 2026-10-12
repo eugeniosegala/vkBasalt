@@ -3,6 +3,15 @@
 // applying SDR contrast/halo thresholds to PQ exaggerates bright edges.
 layout(constant_id = 0) const bool hdrSharpening = false;
 
+// Zero retains the original integer-offset sampling, including native HDR.
+// MAKO supplies source texel size only for its internal HDR display resize.
+layout(constant_id = 1) const float sharpenTexelWidth = 0.0;
+layout(constant_id = 2) const float sharpenTexelHeight = 0.0;
+#define sharpenSample(img, coord, offset) \
+    ((hdrSharpening && sharpenTexelWidth > 0.0 && sharpenTexelHeight > 0.0) \
+        ? textureLod(img, (coord) + vec2(offset) * vec2(sharpenTexelWidth, sharpenTexelHeight), 0.0) \
+        : textureLodOffset(img, coord, 0.0, offset))
+
 #include "hdr_sharpen_curve.glsl"
 
 vec3 sharpenPq(vec3 code, float range)

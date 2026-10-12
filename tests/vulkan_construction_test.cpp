@@ -17,6 +17,7 @@
 
 namespace vkBasalt
 {
+    VkBool32 VKAPI_CALL makoSetSwapchainSharpenSourceExtentV1(VkDevice, VkSwapchainKHR, uint32_t, uint32_t);
     VkBool32 VKAPI_CALL makoSetSwapchainHdrPrecisionV1(VkDevice, VkSwapchainKHR, VkBool32);
     VkBool32 VKAPI_CALL makoSetSwapchainColorSpaceV1(VkDevice, VkSwapchainKHR, VkColorSpaceKHR);
     extern std::shared_ptr<Config>                                               pConfig;
@@ -41,6 +42,7 @@ namespace
     uintptr_t          deviceDispatch = 0;
     unsigned char      mapping[4096]{};
     std::vector<VkBool32> fragmentSpecializations;
+    std::vector<float> fragmentFootprints;
     std::vector<VkFormat> imageViewFormats;
     size_t sampledOutputDependencies = 0;
     // Vulkan uses pointers for non-dispatchable handles on 64-bit and uint64_t
@@ -185,13 +187,23 @@ namespace
                     const auto& stage = info->pStages[i];
                     if (stage.stage != VK_SHADER_STAGE_FRAGMENT_BIT || !stage.pSpecializationInfo) continue;
                     const auto& spec = *stage.pSpecializationInfo;
-                    if (spec.mapEntryCount == 1 && spec.pMapEntries[0].constantID == 0 &&
+                    if (spec.mapEntryCount >= 1 && spec.pMapEntries[0].constantID == 0 &&
                         spec.pMapEntries[0].size == sizeof(VkBool32))
                     {
                         VkBool32 value;
                         assert(spec.pMapEntries[0].offset + sizeof(value) <= spec.dataSize);
                         std::memcpy(&value, static_cast<const char*>(spec.pData) + spec.pMapEntries[0].offset, sizeof(value));
                         fragmentSpecializations.push_back(value);
+                        if (spec.mapEntryCount == 3) {
+                            for (uint32_t j = 1; j < 3; ++j) {
+                                const auto& entry = spec.pMapEntries[j];
+                                assert(entry.constantID == j && entry.size == sizeof(float));
+                                assert(entry.offset + sizeof(float) <= spec.dataSize);
+                                float texel;
+                                std::memcpy(&texel, static_cast<const char*>(spec.pData) + entry.offset, sizeof(texel));
+                                fragmentFootprints.push_back(texel);
+                            }
+                        }
                     }
                 }
                 // Vulkan permits partial pipeline results when a batch returns an error.
@@ -293,6 +305,22 @@ int main()
         assert(!handoff(device->device, handle, VK_COLOR_SPACE_HDR10_HLG_EXT));
         assert(handoff(device->device, handle, VK_COLOR_SPACE_HDR10_ST2084_EXT));
         assert(swapchain->hdr());
+        using SourceHandoff = VkBool32 (VKAPI_PTR *)(VkDevice, VkSwapchainKHR, uint32_t, uint32_t);
+        static_assert(std::is_same_v<decltype(&vkBasalt::makoSetSwapchainSharpenSourceExtentV1), SourceHandoff>);
+        const auto source = &vkBasalt::makoSetSwapchainSharpenSourceExtentV1;
+        swapchain->imageExtent = {3840, 2160};
+        assert(!source(VK_NULL_HANDLE, handle, 2560, 1440));
+        assert(!source(device->device, VK_NULL_HANDLE, 2560, 1440));
+        for (const auto invalid : {VkExtent2D{0,1440}, {2560,0}, {4096,2160},
+                {1280,720}, {2560,1080}, {0xffffffffu,0xffffffffu}})
+            assert(!source(device->device, handle, invalid.width, invalid.height));
+        assert(swapchain->sharpenSourceExtent.width == 0);
+        assert(source(device->device, handle, 2560, 1440));
+        assert(swapchain->sharpenSourceExtent.width == 2560);
+        assert(swapchain->sharpenSourceExtent.height == 1440);
+        assert(!source(device->device, handle, 1280, 720));
+        assert(swapchain->sharpenSourceExtent.width == 2560);
+        assert(source(device->device, handle, 2560, 1440));
         const auto precision = &vkBasalt::makoSetSwapchainHdrPrecisionV1;
         assert(precision(device->device, handle, VK_TRUE));
         assert(swapchain->hdrReducedPrecision && swapchain->hdrPrecisionRevision == 1);
@@ -302,6 +330,8 @@ int main()
         assert(precision(device->device, handle, VK_FALSE) && !swapchain->hdrReducedPrecision);
 
         swapchain->fakeImages.push_back(handleFromValue<VkImage>(21));
+        assert(!source(device->device, handle, 3840, 2160));
+        assert(swapchain->sharpenSourceExtent.width == 2560);
         assert(!handoff(device->device, handle, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR));
         swapchain->fakeImages.clear();
         vkBasalt::swapchainMap.erase(handle);
@@ -311,8 +341,13 @@ int main()
         swapchain->format = VK_FORMAT_R16G16B16A16_SFLOAT;
         vkBasalt::swapchainMap[handle] = swapchain;
         assert(!swapchain->hdr());
+        swapchain->imageExtent = {3840, 2160};
+        assert(swapchain->sharpenSourceExtent.width == 0);
+        assert(!source(device->device, handle, 2560, 1440));
         assert(handoff(device->device, handle, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT));
+        assert(source(device->device, handle, 2560, 1440));
         assert(handoff(device->device, handle, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR));
+        assert(!source(device->device, handle, 2560, 1440));
         assert(!swapchain->hdr());
         vkBasalt::swapchainMap.clear();
     }
@@ -391,14 +426,20 @@ int main()
         swapchain.format = color == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT
             ? VK_FORMAT_R16G16B16A16_SFLOAT : VK_FORMAT_A2B10G10R10_UNORM_PACK32;
         swapchain.imageExtent = {320, 240};
+        for (const auto source : {VkExtent2D{}, {160,120}})
         for (const auto& name : {"cas", "dls"})
         {
+            swapchain.sharpenSourceExtent = source;
             fragmentSpecializations.clear();
+            fragmentFootprints.clear();
             {
                 auto effect = vkBasalt::createConfiguredEffect(&swapchain, name,
                     {VK_NULL_HANDLE}, {VK_NULL_HANDLE}, &config,
                     swapchain.effectFormat(), swapchain.effectFormat());
                 assert(fragmentSpecializations == std::vector<VkBool32>{swapchain.hdr() ? VK_TRUE : VK_FALSE});
+                const bool resized = swapchain.hdr() && source.width;
+                assert((fragmentFootprints == std::vector<float>{
+                    resized ? 1.0f/160.0f : 0.0f, resized ? 1.0f/120.0f : 0.0f}));
             }
             assert(live.empty());
         }
@@ -449,6 +490,7 @@ technique Tone {
                 swapchain.swapchainCreateInfo.imageExtent      = swapchain.imageExtent;
                 swapchain.swapchainCreateInfo.imageArrayLayers = 1;
                 swapchain.imageCount                           = 2;
+                if (swapchain.hdr()) assert(swapchain.setSharpenSourceExtent({160,120}));
                 swapchain.images                               = {VK_NULL_HANDLE, VK_NULL_HANDLE};
                 swapchain.fakeImages                           = swapchain.images;
                 d.supportsMutableFormat                        = true;
@@ -464,12 +506,18 @@ technique Tone {
                 swapchain.effectSelectionRevision              = UINT64_MAX;
                 imageViewFormats.clear();
                 sampledOutputDependencies = 0;
+                fragmentFootprints.clear();
                 vkBasalt::updateLiveEffectGraph(&swapchain);
+                assert(swapchain.sharpenSourceExtent.width == (swapchain.hdr() ? 160u : 0u));
                 if (failure == 0)
                 {
                     total = calls;
                     assert(swapchain.activeEffectGraph != previous);
                     assert(sampledOutputDependencies >= 3);
+                    if (selection == "CustomTone:cas")
+                        assert((fragmentFootprints == std::vector<float>{
+                            swapchain.hdr() ? 1.0f/160.0f : 0.0f,
+                            swapchain.hdr() ? 1.0f/120.0f : 0.0f}));
                     if (color == VK_COLOR_SPACE_HDR10_ST2084_EXT) {
                         // Two views for each of two direct HDR10 input images,
                         // then float output views; no graph-boundary copy.

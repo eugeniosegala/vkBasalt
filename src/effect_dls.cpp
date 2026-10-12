@@ -13,6 +13,7 @@
 #include "sampler.hpp"
 
 #include "shader_sources.hpp"
+#include "sharpen_specialization.hpp"
 
 namespace vkBasalt
 {
@@ -30,16 +31,15 @@ namespace vkBasalt
                          std::vector<VkImage> outputImages,
                          Config*              pConfig,
                          bool                 hdr,
-                         VkFormat             inputFormat)
+                         VkFormat             inputFormat,
+                         VkExtent2D           sourceExtent)
     {
         vertexCode   = full_screen_triangle_vert;
         fragmentCode = dls_frag;
 
         pVertexSpecInfo   = nullptr;
-        VkBool32 hdrValue = hdr;
-        VkSpecializationMapEntry entry{0, 0, sizeof(hdrValue)};
-        VkSpecializationInfo info{1, &entry, sizeof(hdrValue), &hdrValue};
-        pFragmentSpecInfo = &info;
+        SharpenSpecialization specialization(hdr, imageExtent, sourceExtent);
+        pFragmentSpecInfo = &specialization.info;
 
         init(pLogicalDevice, format, imageExtent, inputImages, outputImages, pConfig, sizeof(DlsSettings), inputFormat);
         pFragmentSpecInfo = nullptr;

@@ -35,7 +35,7 @@ layout(set=1, binding=0) uniform DlsSettings
 layout(location = 0) in vec2 textureCoord;
 layout(location = 0) out vec4 fragColor;
 
-#define textureLod0Offset(img, coord, offset) textureLodOffset(img, coord, 0.0f, offset)
+#define textureLod0Offset(img, coord, offset) sharpenSample(img, coord, offset)
 #define textureLod0(img, coord) textureLod(img, coord, 0.0f)
 
 float GetLumaComponents(float r, float g, float b)

@@ -1,6 +1,18 @@
 #include "logical_swapchain.hpp"
 #include <cassert>
+#include "sharpen_specialization.hpp"
 int main() {
+    for (bool hdr : {false, true}) {
+        for (const auto source : {VkExtent2D{}, {3840,2160}, {2560,1440}}) {
+            vkBasalt::SharpenSpecialization spec(hdr, {3840,2160}, source);
+            assert(spec.values.hdr == VkBool32(hdr));
+            assert(spec.info.pData == &spec.values);
+            const bool changed = hdr && source.width == 2560;
+            assert(spec.values.width == (changed ? 1.0f/2560.0f : 0.0f));
+            assert(spec.values.height == (changed ? 1.0f/1440.0f : 0.0f));
+        }
+    }
+
     vkBasalt::LogicalSwapchain swapchain{};
     const std::vector<std::string> empty{}, cas{"cas"}, custom{"custom"},
         chain{"custom", "cas"}, reverse{"cas", "custom"}, middle{"custom", "cas", "custom"};

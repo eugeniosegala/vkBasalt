@@ -25,7 +25,8 @@ namespace vkBasalt
                   std::vector<VkImage> outputImages,
                   Config*              pConfig,
                   VkFormat             inputFormat = VK_FORMAT_UNDEFINED,
-                  bool                 hdr = false);
+                  bool                 hdr = false,
+                  VkExtent2D           sourceExtent = {});
         void updateEffect(uint32_t imageIndex) override;
         ~CasEffect();
 
