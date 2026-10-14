@@ -17,6 +17,7 @@
 
 #include "logical_device.hpp"
 #include "logical_swapchain.hpp"
+#include "present_scratch.hpp"
 #include "live_effects.hpp"
 #include "toggle_key_poll.hpp"
 
@@ -882,10 +883,7 @@ namespace vkBasalt
         if (pLogicalDevice->depthUpdateResult != VK_SUCCESS)
             return pLogicalDevice->depthUpdateResult;
 
-        std::vector<VkSemaphore> presentSemaphores;
-        presentSemaphores.reserve(pPresentInfo->swapchainCount);
-
-        std::vector<VkPipelineStageFlags> waitStages(pPresentInfo->waitSemaphoreCount, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        PresentScratch scratch(pPresentInfo->waitSemaphoreCount, pPresentInfo->swapchainCount);
 
         for (unsigned int i = 0; i < (*pPresentInfo).swapchainCount; i++)
         {
@@ -904,7 +902,7 @@ namespace vkBasalt
             submitInfo.pNext              = nullptr;
             submitInfo.waitSemaphoreCount = i == 0 ? pPresentInfo->waitSemaphoreCount : 0;
             submitInfo.pWaitSemaphores    = i == 0 ? pPresentInfo->pWaitSemaphores : nullptr;
-            submitInfo.pWaitDstStageMask  = i == 0 ? waitStages.data() : nullptr;
+            submitInfo.pWaitDstStageMask  = i == 0 ? scratch.waitStages() : nullptr;
             submitInfo.commandBufferCount = 1;
             const auto& selectedGraph = presentEffect
                                             ? pLogicalSwapchain->activeEffectGraph
@@ -913,7 +911,7 @@ namespace vkBasalt
             submitInfo.signalSemaphoreCount = 1;
             submitInfo.pSignalSemaphores    = &(pLogicalSwapchain->semaphores[index]);
 
-            presentSemaphores.push_back(pLogicalSwapchain->semaphores[index]);
+            scratch.semaphores()[i] = pLogicalSwapchain->semaphores[index];
 
             VkFence completion = VK_NULL_HANDLE;
             VkResult vr = selectedGraph->prepareDepthSubmission(pLogicalDevice, index, completion);
@@ -929,8 +927,8 @@ namespace vkBasalt
         }
 
         VkPresentInfoKHR presentInfo   = *pPresentInfo;
-        presentInfo.waitSemaphoreCount = presentSemaphores.size();
-        presentInfo.pWaitSemaphores    = presentSemaphores.data();
+        presentInfo.waitSemaphoreCount = pPresentInfo->swapchainCount;
+        presentInfo.pWaitSemaphores    = scratch.semaphores();
 
         return pLogicalDevice->vkd.QueuePresentKHR(queue, &presentInfo);
     }

@@ -8,6 +8,10 @@ config_reload_test = executable(
 
 test('config reload', config_reload_test)
 
+present_scratch_test = executable('present_scratch_test', 'present_scratch_test.cpp',
+    include_directories: include_directories('../src'))
+test('presentation scratch allocation and overflow', present_scratch_test)
+
 live_effects_test = executable(
     'live_effects_test',
     'live_effects_test.cpp',
