@@ -1,4 +1,4 @@
-# vkBasalt
+# MAKO vkBasalt
 
 <p align="center">
   <img src="assets/mako-vkbasalt.webp" width="256" alt="MAKO shark splitting light through a prism into vkBasalt shader effects" />
