@@ -47,6 +47,8 @@ meson compile -C builddir.32
 meson test -C builddir.32 --print-errorlogs
 ```
 
+The tests also cover compiler-reflected controls, effect/vector isolation, default resets, and legacy parameter values. The native bundle includes the 64-bit `bin/mako-shader-tool` used by MAKO editors; both layer architectures consume the same parameter-key contract.
+
 The tests cover configuration reload, effect replacement, shader compilation, texture validation, Vulkan construction rollback, API forwarding, depth lifetime, presentation allocation, and HDR policies. They do not establish game compatibility or GPU image quality.
 
 ## Optional system installation

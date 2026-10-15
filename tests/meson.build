@@ -90,3 +90,8 @@ endforeach
 hdr_sharpen_range_test = executable('hdr_sharpen_range_test', 'hdr_sharpen_range_test.cpp',
     include_directories: include_directories('../src'))
 test('HDR sharpening SDR contrast equivalence', hdr_sharpen_range_test)
+
+shader_parameters_test = executable('shader_parameters_test', 'shader_parameters_test.cpp', '../src/config.cpp', '../src/logger.cpp',
+    include_directories: include_directories('../src'))
+test('effect-local shader parameters and legacy values', shader_parameters_test)
+test('compiler-reflected shader controls', find_program('python3'), args: [files('shader_tool_test.py'), shader_tool])

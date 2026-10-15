@@ -23,7 +23,7 @@ namespace vkBasalt
                      VkExtent2D           imageExtent,
                      std::vector<VkImage> inputImages,
                      std::vector<VkImage> outputImages,
-                     Config*              pConfig);
+                     Config*              pConfig, const std::string& effectName = "deband");
         ~DebandEffect();
     };
 } // namespace vkBasalt

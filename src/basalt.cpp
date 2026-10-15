@@ -157,7 +157,7 @@ namespace vkBasalt
                 inputImages, outputImages, pConfig.get(), convertToUNORM(inputFormat), pLogicalSwapchain->hdr(), pLogicalSwapchain->sharpenSourceExtent);
         if (effectName == "deband" || effectName == "makoDeband")
             return std::make_shared<DebandEffect>(
-                pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get());
+                pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get(), effectName);
         if (effectName == "smaa")
             return std::make_shared<SmaaEffect>(
                 pLogicalDevice, unormFormat, pLogicalSwapchain->imageExtent, inputImages, outputImages, pConfig.get());

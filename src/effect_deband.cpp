@@ -1,4 +1,5 @@
 #include "effect_deband.hpp"
+#include "deband_parameters.hpp"
 
 #include <cstring>
 
@@ -20,7 +21,7 @@ namespace vkBasalt
                                VkExtent2D           imageExtent,
                                std::vector<VkImage> inputImages,
                                std::vector<VkImage> outputImages,
-                               Config*              pConfig)
+                               Config*              pConfig, const std::string& effectName)
     {
         vertexCode   = full_screen_triangle_vert;
         fragmentCode = deband_frag;
@@ -44,11 +45,11 @@ namespace vkBasalt
         debandOptions.reverseScreenHeight = 1.0f / imageExtent.height;
 
         // get Options
-        debandOptions.debandAvgdiff = pConfig->getOption<float>("debandAvgdiff", 3.4f);
-        debandOptions.debandMaxdiff = pConfig->getOption<float>("debandMaxdiff", 6.8f);
-        debandOptions.debandMiddiff = pConfig->getOption<float>("debandMiddiff", 3.3f);
-        debandOptions.range         = pConfig->getOption<float>("debandRange", 16.0f);
-        debandOptions.iterations    = pConfig->getOption<int32_t>("debandIterations", 4);
+        debandOptions.debandAvgdiff = debandParameterValue(*pConfig, effectName, 0);
+        debandOptions.debandMaxdiff = debandParameterValue(*pConfig, effectName, 1);
+        debandOptions.debandMiddiff = debandParameterValue(*pConfig, effectName, 2);
+        debandOptions.range         = debandParameterValue(*pConfig, effectName, 3);
+        debandOptions.iterations    = static_cast<int32_t>(debandParameterValue(*pConfig, effectName, 4));
 
         std::vector<VkSpecializationMapEntry> specMapEntrys(9);
         for (uint32_t i = 0; i < specMapEntrys.size(); i++)

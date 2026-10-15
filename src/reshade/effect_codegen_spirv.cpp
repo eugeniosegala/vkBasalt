@@ -575,6 +575,15 @@ private:
 	}
 	id   define_uniform(const location &, uniform_info &info) override
 	{
+		// User controls without an explicit initializer default to zero. Source-driven
+		// uniforms retain the existing dynamic UBO path.
+		if (_uniforms_to_spec_constants && !info.has_initializer_value && info.type.is_numeric() &&
+			std::none_of(info.annotations.begin(), info.annotations.end(), [](const auto &a) { return a.name == "source"; }))
+		{
+			info.has_initializer_value = true;
+			info.initializer_value = {};
+			if (info.type.is_array()) info.initializer_value.array_data.resize(info.type.array_length);
+		}
 		if (_uniforms_to_spec_constants && info.has_initializer_value)
 		{
 			const id res = emit_constant(info.type, info.initializer_value, true);
@@ -623,6 +632,14 @@ private:
 
 						assert(initializer_value.array_data.size() == base_inst.operands.size());
 						initializer_value = initializer_value.array_data[i];
+					}
+
+					// Scalar array elements are already specialization constants. Their
+					// operands contain literal bits, not IDs of vector components.
+					if (elem_inst.op != spv::OpSpecConstantComposite)
+					{
+						add_spec_constant(elem_inst, info, initializer_value, 0);
+						continue;
 					}
 
 					for (size_t row = 0; row < elem_inst.operands.size(); ++row)
@@ -1168,6 +1185,16 @@ private:
 				// These should have been handled above already
 				break;
 			case expression::operation::op_dynamic_index:
+				if (op.from.is_array())
+				{
+					// SPIR-V can dynamically index an array through a pointer, but
+					// specialization composites are values rather than variables.
+					const id temporary = define_variable(exp.location, op.from, {}, false, result);
+					const id pointer = add_instruction(spv::OpAccessChain, convert_type(op.to, true, spv::StorageClassFunction))
+						.add(temporary).add(op.index).result;
+					result = add_instruction(spv::OpLoad, convert_type(op.to)).add(pointer).result;
+					break;
+				}
 				if (op.from.is_vector())
 				{
 					assert(result != 0 && op.to.is_scalar());
@@ -1181,7 +1208,7 @@ private:
 				break;
 			case expression::operation::op_constant_index:
 				assert(result != 0);
-				assert(op.from.is_vector() || op.from.is_matrix());
+				assert(op.from.is_array() || op.from.is_vector() || op.from.is_matrix());
 				result = add_instruction(spv::OpCompositeExtract, convert_type(op.to))
 					.add(result)
 					.add(op.index) // Literal Index

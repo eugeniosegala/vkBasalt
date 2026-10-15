@@ -60,3 +60,6 @@ vkBasalt_library = shared_library(meson.project_name().to_lower(),
     gnu_symbol_visibility: 'hidden',
     install : true,
     install_dir : lib_dir)
+
+shader_tool = executable('mako-shader-tool', 'shader_tool.cpp', 'config.cpp', 'logger.cpp', 'stb_image.c',
+    include_directories: vkBasalt_include_path, dependencies: reshade_dep, install: true)

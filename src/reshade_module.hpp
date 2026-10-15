@@ -95,7 +95,7 @@ namespace vkBasalt
     };
 
     inline PreparedReshadeModule compileReshadeModule(Config& config, const std::string& effectName,
-                                                 VkExtent2D extent, bool tenBit)
+                                                 VkExtent2D extent, bool tenBit, bool loadTextures = true)
     {
         reshadefx::preprocessor preprocessor;
         preprocessor.add_macro_definition("__RESHADE__", std::to_string(INT_MAX));
@@ -126,6 +126,7 @@ namespace vkBasalt
         PreparedReshadeModule prepared;
         for (const auto& texture : module.textures)
         {
+            if (!loadTextures) break;
             const auto source = std::find_if(texture.annotations.begin(), texture.annotations.end(),
                                             [](const auto& annotation) { return annotation.name == "source"; });
             if (source == texture.annotations.end() || texture.semantic == "COLOR" || texture.semantic == "DEPTH")

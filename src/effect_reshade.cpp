@@ -1,3 +1,4 @@
+#include "shader_parameters.hpp"
 #include "effect_reshade.hpp"
 
 #include <cstring>
@@ -598,48 +599,18 @@ namespace vkBasalt
             std::vector<VkSpecializationMapEntry> specMapEntrys;
             std::vector<char>                     specData;
 
-            for (uint32_t specId = 0, offset = 0; auto &opt : module.spec_constants)
+            std::unordered_map<std::string, size_t> components;
+            for (uint32_t specId = 0; const auto& opt : module.spec_constants)
             {
-                if (!opt.name.empty())
-                {
-                    std::string val = pConfig->getOption<std::string>(opt.name);
-                    if (!val.empty())
-                    {
-                        std::variant<int32_t, uint32_t, float> convertedValue;
-                        offset = static_cast<uint32_t>(specData.size());
-                        switch (opt.type.base)
-                        {
-                            case reshadefx::type::t_bool:
-                                convertedValue = (int32_t) pConfig->getOption<bool>(opt.name);
-                                specData.resize(offset + sizeof(VkBool32));
-                                std::memcpy(specData.data() + offset, &convertedValue, sizeof(VkBool32));
-                                specMapEntrys.push_back({specId, offset, sizeof(VkBool32)});
-                                break;
-                            case reshadefx::type::t_int:
-                                convertedValue = pConfig->getOption<int32_t>(opt.name);
-                                specData.resize(offset + sizeof(int32_t));
-                                std::memcpy(specData.data() + offset, &convertedValue, sizeof(int32_t));
-                                specMapEntrys.push_back({specId, offset, sizeof(int32_t)});
-                                break;
-                            case reshadefx::type::t_uint:
-                                convertedValue = (uint32_t) pConfig->getOption<int32_t>(opt.name);
-                                specData.resize(offset + sizeof(uint32_t));
-                                std::memcpy(specData.data() + offset, &convertedValue, sizeof(uint32_t));
-                                specMapEntrys.push_back({specId, offset, sizeof(uint32_t)});
-                                break;
-                            case reshadefx::type::t_float:
-                                convertedValue = pConfig->getOption<float>(opt.name);
-                                specData.resize(offset + sizeof(float));
-                                std::memcpy(specData.data() + offset, &convertedValue, sizeof(float));
-                                specMapEntrys.push_back({specId, offset, sizeof(float)});
-                                break;
-                            default:
-                                // do nothing
-                                break;
-                        }
-                    }
+                const auto value = shaderParameterValue(*pConfig, effectName, opt.name, components[opt.name]++);
+                if (!value.empty()) {
+                    const uint32_t bits = shaderParameterBits(opt, value);
+                    const auto offset = static_cast<uint32_t>(specData.size());
+                    specData.resize(offset + sizeof(bits));
+                    std::memcpy(specData.data() + offset, &bits, sizeof(bits));
+                    specMapEntrys.push_back({specId, offset, sizeof(bits)});
                 }
-                specId++;
+                ++specId;
             }
 
             VkSpecializationInfo specializationInfo;

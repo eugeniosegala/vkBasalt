@@ -66,3 +66,12 @@ Set `VKBASALT_LOG_LEVEL` to `trace`, `debug`, `info`, `warn`, `error`, or `none`
 ```bash
 ENABLE_VKBASALT=1 VKBASALT_LOG_LEVEL=debug VKBASALT_LOG_FILE=vkBasalt.log yourgame
 ```
+
+
+## Shader parameter editors
+
+MAKO Decky and the optional Qt UI discover controls with the bundled `mako-shader-tool CONFIG`. The helper uses the same ReShade compiler and preprocessor as the layer and emits schema-1 JSON for selected effects, without a Vulkan device. Labels, descriptions, categories, numeric bounds, choices, and defaults come from uniform annotations. Each vector/matrix/array component has an independent control. Runtime source uniforms and hidden values are excluded; numeric controls without explicit initializers default to zero. The native Deband effect shares a parameter declaration with its rendering implementation. ReShade compatibility limits still apply, and compile-time macros are not uniform controls.
+
+The config key is `makoShader_<hex-effect-alias>_<hex-uniform-name>_<component-index>`. Indices follow compiler order within each uniform, starting at zero. Effect-local keys take precedence over legacy bare-name values, which remain readable. Reset writes the declared default rather than deleting an override and accidentally exposing a legacy value. Saves use the existing live graph-replacement path. No additional GPU pass or per-frame parameter handling is introduced; changing compile-time values can briefly interrupt rendering while a replacement graph is prepared. Shader quality settings can request more GPU work.
+
+An effect-local value of `default` selects the shader’s compiled default in the current runtime context and overrides any legacy bare-name value. This preserves resolution-dependent defaults across resets and later resolution changes.

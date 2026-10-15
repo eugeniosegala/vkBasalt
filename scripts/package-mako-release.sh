@@ -99,6 +99,8 @@ install -Dm755 "$stage64/usr/lib/libvkbasalt.so" \
     "$payload/lib/libvkbasalt.so"
 install -Dm755 "$stage32/usr/lib32/libvkbasalt.so" \
     "$payload/lib32/libvkbasalt.so"
+install -Dm755 "$stage64/usr/bin/mako-shader-tool" "$payload/bin/mako-shader-tool"
+strip --strip-unneeded "$payload/bin/mako-shader-tool"
 strip --strip-unneeded "$payload/lib/libvkbasalt.so"
 strip --strip-unneeded "$payload/lib32/libvkbasalt.so"
 
@@ -155,6 +157,7 @@ verify_layer() {
     fi
 }
 
+verify_elf_class "$payload/bin/mako-shader-tool" 2
 verify_elf_class "$payload/lib/libvkbasalt.so" 2
 verify_elf_class "$payload/lib32/libvkbasalt.so" 1
 verify_layer "$payload/lib/libvkbasalt.so"
@@ -162,7 +165,7 @@ verify_layer "$payload/lib32/libvkbasalt.so"
 
 (
     cd "$payload"
-    find lib lib32 share -type f -print | LC_ALL=C sort | xargs sha256sum \
+    find bin lib lib32 share -type f -print | LC_ALL=C sort | xargs sha256sum \
         > SHA256SUMS
     sha256sum --check --status SHA256SUMS
 )
