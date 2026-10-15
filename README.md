@@ -1,207 +1,42 @@
 # vkBasalt
 
-This fork publishes immutable `mako-v*` releases containing verified 64-bit and 32-bit Linux Vulkan-layer libraries for MAKO. MAKO consumes those archives by exact release tag and SHA-256 checksum and installs them only in its private user-owned directory. Upstream development remains credited to DadSchoorse and the vkBasalt contributors.
+A Vulkan post-processing layer for Linux, with sharpening, anti-aliasing, colour LUTs, and ReShade FX shaders. Works with native Vulkan games, DXVK, and vkd3d.
 
-Presentation keeps up to four wait stages and four output semaphores in local storage, avoiding heap allocation for ordinary single-window frames. Larger application wait lists and multi-swapchain presents retain dynamically sized storage. Shader execution, semaphore ordering, and downstream presentation results are unchanged.
+This is the [MAKO](https://github.com/eugeniosegala/MAKO) fork of [DadSchoorse/vkBasalt](https://github.com/DadSchoorse/vkBasalt), adding live effect changes, HDR processing, and verified 64-bit and 32-bit release bundles.
 
-MAKO launches this fork with `VKBASALT_CONFIG_RELOAD=1` and an explicit `VKBASALT_CONFIG_FILE`. The layer checks that file at a bounded interval and updates CAS/DLS strength and DLS denoise through per-swapchain-image uniform buffers. MAKO's managed anti-aliasing, sharpening, and curated shader catalog can switch live, including ordered combinations of the colour and finishing presets bundled by MAKO Decky. The catalog also recognizes MAKO's Clarity and Levels Plus effects. Selection changes drain the layer's graphics queue once before retiring the previous graph, which bounds effect-owned image and pipeline memory instead of retaining every visited combination for the lifetime of the swapchain. FXAA uses its default medium-dither preset and SMAA defaults to its documented medium threshold and search limits; explicit configuration-file values still override the SMAA defaults. Layer activation remains restart-bound. Custom ReShade effect selections, removal, order, paths, includes, and configuration-file options now use the same live graph replacement. A complete candidate is prepared before the previous graph is retired; missing files, invalid textures, compilation failures, and Vulkan construction failures retain the previous graph and are retried after a later configuration save. FX source/include/texture file edits alone are not watched: MAKO’s Refresh action advances `makoReloadGeneration` to rebuild the active chain, including an unchanged selection. Manual clients can advance that configuration option. Chain changes can briefly hitch during compilation and queue drain. Intermediate chain images are released when a shorter chain replaces a longer one.
+## Use with MAKO
 
-Multi-pass ReShade effects explicitly synchronize colour-attachment writes and layout transitions before subsequent sampling, including reuse of ping-pong targets. This dependency applies to SDR and HDR without adding an image, draw, or CPU wait.
+MAKO installs and configures its own private copy. Choose effects in **MAKO Decky** or **MAKO Renderer Configuration**; no separate vkBasalt installation is needed.
 
-Colour-only effect graphs do not reference game depth images or rebuild their command buffers when the game creates or destroys depth targets. Effects that sample depth track their own per-image submission fences and wait for those before descriptors, commands, and views are replaced; unrelated depth-image changes leave those graphs alone. Depth image, format, and view are tracked together, including out-of-order binding, failed creation/binding, and destruction before binding. A failed depth-graph replacement stops further shader submissions instead of reusing invalid commands. This covers SDR and HDR. Colour-only graphs allocate no depth fences and add no per-frame fence operation; depth callbacks never wait on an application queue without owning its synchronization. Vulkan 1.1/core/KHR `BindImageMemory2` depth capture remains unsupported; those images are safely untracked for sampling.
+## Standalone use
 
-The ReShade path allocates a stencil attachment only when a selected pass enables stencil. Effects that do not use it avoid that allocation; effects that require stencil retain the existing path. This is an allocation optimization, not a promise that every ReShade shader or depth-based effect works.
+Install your distribution's vkBasalt package or [build this fork](docs/BUILDING.md). Distribution packages may not include this fork's MAKO features.
 
-MAKO's Frame Generation layer sits above vkBasalt, so every generated and real output passes through this layer's present hook. The toggle key is therefore read at most once every 50 ms rather than through a display-server round trip on every present, and each ReShade effect keeps its uniform buffer mapped for its lifetime instead of mapping and unmapping it on every present. Effects still run on every output, so their GPU cost scales with the Frame Generation multiplier.
+Enable it in Steam launch options:
 
-vkBasalt is a Vulkan post processing layer to enhance the visual graphics of games.
-
-The built-in effects are:
-
-- Contrast Adaptive Sharpening
-- Denoised Luma Sharpening
-- Fast Approximate Anti-Aliasing
-- Enhanced Subpixel Morphological Anti-Aliasing
-- 3D color LookUp Table
-
-It is also possible to use Reshade Fx shaders.
-
-## Disclaimer
-
-This is one of my first projects ever, so expect it to have bugs. Use it at your own risk.
-
-## Building from Source
-
-### Dependencies
-
-Before building, you will need:
-
-- GCC >= 9
-- X11 development files
-- glslang
-- SPIR-V Headers
-- Vulkan Headers
-
-### Building
-
-**The examples below install system-wide for manual vkBasalt use; MAKO's packaged fork instead lives in MAKO's private directory. Installing it system-wide is unnecessary for MAKO. `--prefix=/usr` writes into a directory normally owned by the package manager. Omit that prefix for `/usr/local`, and make sure the dynamic linker can find the installed library.**
-
-For a separate system-wide vkBasalt installation, prefer your distribution's package when available.
-
-```
-git clone https://github.com/eugeniosegala/vkBasalt.git
-cd vkBasalt
-```
-
-#### 64bit
-
-```
-meson setup --buildtype=release --prefix=/usr builddir
-ninja -C builddir install
-```
-
-#### 32bit
-
-Make sure that `PKG_CONFIG_PATH=/usr/lib32/pkgconfig` and `--libdir=lib32` are correct for your distro and change them if needed. On Debian based distros you need to replace `lib32` with `lib/i386-linux-gnu`, for example.
-
-```
-ASFLAGS=--32 CFLAGS=-m32 CXXFLAGS=-m32 PKG_CONFIG_PATH=/usr/lib32/pkgconfig meson setup --prefix=/usr --buildtype=release --libdir=lib32 -Dwith_json=false builddir.32
-ninja -C builddir.32 install
-```
-
-## MAKO Vulkan baseline and release validation
-
-`vulkan-headers-revision.txt` pins Vulkan Headers to `v1.4.365`, aligned with MAKO Renderer's `engine/vulkan-headers-revision.txt`. The release packager fetches that immutable tag and passes its include directory explicitly to both architectures. Direct Meson builds require headers 1.4.365 or newer and can select them with `-Dvulkan_headers=/path/to/Vulkan-Headers/include`. The reviewed API declaration lives in `meson.build`; Meson generates all manifests and the runtime declaration from it. Header upgrades require a separate review of API support before changing that declaration.
-
-Run `scripts/package-mako-release.sh mako-v0.3.2.10-N /tmp/vkBasalt-candidate.tar.xz` to compile and test both architectures without installing or publishing. The archive records the exact Vulkan header tag, resolved commit, and declared API in `share/doc/vkbasalt/SOURCE`. Tests cover Vulkan 1.4 forwarding and failed instance creation as well as live effects and resource rollback. A new `mako-v*` tag triggers `.github/workflows/release-mako.yml`, which runs that same tested packager and publishes an immutable attested archive. MAKO must verify the downloaded public asset before updating its dependency pin and generated Flatpak module.
-
-## HDR effect boundary
-
-MAKO's isolated Gamescope bridge supplies the original application colour space through the private `makoSetSwapchainColorSpaceV1(VkDevice, VkSwapchainKHR, VkColorSpaceKHR) -> VkBool32` device-dispatch hook after lower creation and before image enumeration. The hook rejects unknown swapchains, device mismatches, invalid HDR format pairs, and late changes after private images exist. Bit depth alone never enables HDR processing. Ordinary Vulkan callers retain the colour space in their original creation structure.
-
-For HDR10/PQ and linear scRGB, active effect chains use RGBA16F intermediate images containing PQ BT.2020 code values. Linear scRGB is converted from 80-nit BT.709 units before the chain and restored afterwards; HDR10 retains its transfer function. Linear scRGB needs two conversion passes for active chains. HDR10 skips the input copy when CAS, DLS, or a ReShade effect is first and the output copy when either sharpener is last: either sharpener alone runs in one pass directly between the original packed 10-bit images, while multi-effect intermediates remain RGBA16F. This removes full-resolution traffic without lowering effect precision; avoiding the input copy also removes one image per swapchain slot and its half-float rounding. ReShade ping-pong images and outputs retain the graph working format, including multi-pass shaders; sampling uses the original input format. Pixel values can change slightly when an intermediate rounding step is removed. An empty chain copies the original images without colour conversion. Live selection changes retain the same colour-space contract and retire unused intermediates. Managed and custom effects run inside that bounded display-code domain; arbitrary custom shaders may deliberately clamp, remap colour, or use their own lower-precision intermediate textures and still need visual qualification.
-
-CAS and DLS use an HDR-only transfer correction inside their existing shader pass. They evaluate contrast and highlight limits in an sRGB-like code range referenced to 203 nits while retaining BT.2020 primaries. One shared reversible RGB scale places bright neighbourhoods in the filters' SDR midrange (a 0.5 local maximum), preserving HDR brightness on output. This gives equivalent relative detail the SDR midrange sharpening response instead of suppressing it as clipped white. Neighbourhoods already below midrange keep their original range; contrast and denoise guards remain active. CAS converts shared neighbourhood extrema only once and preserves constant HDR neighbourhoods directly, skipping transfer arithmetic for that identity case; HDR10 DLS also skips the redundant graph-boundary copies. The generated transfer approximations use a cubic rational main curve on input and a quartic rational main curve on output, retaining the analytic dark output segment. The accuracy gate checks separate and contracted float32 arithmetic, monotonicity, adjacent values at both joins, a maximum 0.1 HDR10-code-value round-trip error, and a maximum 0.01-code-value inverse error. The correction adds arithmetic but no full-resolution pass, image, descriptor, or wider storage format. SDR selects the original shader path at pipeline creation; HDR10 and scRGB both use the correction only after explicit HDR classification. Custom effects keep their existing working-domain contract and need independent visual qualification. Run `python3 scripts/generate-hdr-sharpen-curve.py --check` to validate accuracy and generated-source freshness.
-
-MAKO's internal HDR display resize can supply `makoSetSwapchainSharpenSourceExtentV1(VkDevice, VkSwapchainKHR, uint32_t width, uint32_t height) -> VkBool32` before image exposure. CAS/DLS then sample one source pixel away instead of one output pixel away, retaining their detail footprint after enlargement. The hook requires the correct device, explicit HDR, matching aspect ratio and a source no smaller than half the output dimensions. Invalid or late calls preserve the prior state. Graph replacement retains that swapchain-owned extent; replacement swapchains start with native sampling. SDR, native-size HDR, explicit MAKO Scaling, anti-aliasing and custom shaders keep their existing sampling. The correction uses specialization constants and the same texture fetches, adding no pass, image, uniform update or synchronization.
-
-### Experimental compact HDR buffers
-
-MAKO can opt into packed RGB10A2 PQ intermediates through the private `makoSetSwapchainHdrPrecisionV1(VkDevice, VkSwapchainKHR, VkBool32) -> VkBool32` hook. It validates swapchain/device ownership and Boolean input and may run before image exposure or later. Explicit HDR is still required; SDR ignores the request. The default remains RGBA16F. Supported sampled, filtered and blendable colour-attachment formats are checked outside steady rendering, with RGBA16F fallback. scRGB retains the existing graph-boundary conversions and its original output format.
-
-When the validated PQ graph format exactly matches the HDR10 output, the final effect writes directly to that output, eliminating one copy pass and one full-resolution intermediate image per swapchain slot. This also covers multi-pass ReShade effects because their working, ping-pong and output formats remain identical. A compact-format fallback, different packed channel order, or linear scRGB output retains its required boundary pass.
-
-A precision change uses the ordinary live graph transaction. Intermediate sets belong to their graph, so a complete new format can be prepared without reinterpreting images still referenced by the previous graph. Failed construction frees only candidate resources; an uncertain final drain retains them until a later safe retirement or teardown. Identical requests do not allocate or drain. Compact storage halves intermediate bytes per pixel but reduces RGB and alpha precision and clamps overshoot; custom blending and effect chains may change, and FPS gains require measurement. The constructed graph log records `working_format` so a request is distinguishable from actual activation.
-
-## Packaging status
-
-[Debian](https://tracker.debian.org/pkg/vkbasalt) `sudo apt install vkbasalt`
-
-[Fedora](https://src.fedoraproject.org/rpms/vkBasalt) `sudo dnf install vkBasalt`
-
-[Void Linux](https://github.com/void-linux/void-packages/blob/master/srcpkgs/vkBasalt/template) `sudo xbps-install vkBasalt`
-
-## Usage
-
-Enable the layer with the environment variable.
-
-### Standard
-
-When using the terminal or an application (.desktop) file, execute:
-
-```ini
-ENABLE_VKBASALT=1 yourgame
-```
-
-### Lutris
-
-With Lutris, follow these steps below:
-
-1. Right click on a game, and press `configure`.
-2. Go to the `System options` tab and scroll down to `Environment variables`.
-3. Press on `Add`, and add `ENABLE_VKBASALT` under `Key`, and add `1` under `Value`.
-
-### Steam
-
-With Steam, edit your launch options and add:
-
-```ini
+```text
 ENABLE_VKBASALT=1 %command%
 ```
 
-## Configure
+Or launch a game from a terminal:
 
-Settings like the CAS sharpening strength can be changed in the config file. The config file will be searched for in the following locations:
-
-- a file set with the environment variable `VKBASALT_CONFIG_FILE=/path/to/vkBasalt.conf`
-- `vkBasalt.conf` in the working directory of the game
-- `$XDG_CONFIG_HOME/vkBasalt/vkBasalt.conf` or `~/.config/vkBasalt/vkBasalt.conf` if `XDG_CONFIG_HOME` is not set
-- `$XDG_DATA_HOME/vkBasalt/vkBasalt.conf` or `~/.local/share/vkBasalt/vkBasalt.conf` if `XDG_DATA_HOME` is not set
-- `/etc/vkBasalt.conf`
-- `/etc/vkBasalt/vkBasalt.conf`
-- `/usr/share/vkBasalt/vkBasalt.conf`
-
-If you want to make changes for one game only, you can create a file named `vkBasalt.conf` in the working directory of the game and change the values there.
-
-#### Reshade Fx shaders
-
-To run reshade fx shaders e.g. shaders from the [reshade repo](https://github.com/crosire/reshade-shaders), you have to set `reshadeTexturePath` and `reshadeIncludePath` to the matching dirctories from the repo. To then use a specific shader you need to set a custom effect name to the shader path and then add that effect name to `effects` like every other effect.
-
-```ini
-effects = colorfulness:denoise
-
-colorfulness = /home/user/reshade-shaders/Shaders/Colourfulness.fx
-denoise = /home/user/reshade-shaders/Shaders/Denoise.fx
-reshadeTexturePath = /home/user/reshade-shaders/Textures
-reshadeIncludePath = /home/user/reshade-shaders/Shaders
+```bash
+ENABLE_VKBASALT=1 yourgame
 ```
 
-#### Ingame Input
+Copy the [example configuration](config/vkBasalt.conf) to `~/.config/vkBasalt/vkBasalt.conf` and choose your effects. **Home** toggles effects under X11. See [configuration](docs/CONFIGURATION.md) for per-game settings, Lutris, and custom shaders.
 
-The [HOME key](https://en.wikipedia.org/wiki/Home_key) can be used to disable and re-enable the applied effects, the key can also be changed in the config file. This is based on X11 so it won't work on pure wayland. It **should** however at least not crash without X11.
+## Documentation
 
-#### Debug Output
+| Guide | Contents |
+| --- | --- |
+| [Configuration](docs/CONFIGURATION.md) | Effects, config paths, live reload, ReShade, and logging |
+| [Building and releases](docs/BUILDING.md) | Dependencies, 32/64-bit builds, tests, and MAKO packaging |
+| [MAKO integration](docs/MAKO-INTEGRATION.md) | Layer ordering, resource lifetime, and performance contracts |
+| [HDR processing](docs/HDR.md) | Colour pipeline, private hooks, sharpening, and compact buffers |
 
-The amount of debug output can be set with the `VKBASALT_LOG_LEVEL` env var, e.g. `VKBASALT_LOG_LEVEL=debug`. Possible values are: `trace, debug, info, warn, error, none`.
+## Credits and license
 
-By default the logger outputs to stderr, a file as output location can be set with the `VKBASALT_LOG_FILE` env var, e.g. `VKBASALT_LOG_FILE="vkBasalt.log"`.
+Original vkBasalt by **Georg Lehmann (DadSchoorse)** and contributors. The ReShade shader compiler is by [crosire and contributors](https://github.com/crosire/reshade).
 
-## FAQ
-
-#### Why is it called vkBasalt?
-
-It's a joke: vulkan post processing &#8594; after vulcan &#8594; basalt
-
-#### Does vkBasalt work with dxvk and vkd3d?
-
-Yes.
-
-#### Will vkBasalt get me banned?
-
-Maybe. To my knowledge this hasn't happened yet but don't blame me if your frog dies.
-
-#### Will there be a openGl version?
-
-No. I don't know anything about openGl and I don't want to either. Also openGl has no layer system like vulkan.
-
-#### Is there a GUI?
-
-The Vulkan layer has no built-in GUI. MAKO Decky and MAKO Renderer Configuration provide controls for MAKO's managed fork.
-
-#### So is vkBasalt just a reshade port for linux?
-
-Not really, most of the code was written from scratch. vkBasalt directly uses reshade source code for the shader compiler (thanks [@crosire](https://github.com/crosire)), but that's about it.
-
-#### Does every reshade shader work?
-
-No. Shaders that need multiple techniques do not work, and some stencil, blending, or depth-dependent effects may still fail. Stencil resources are now allocated only for passes that request them; that change does not remove stencil support or make unsupported ReShade features work.
-
-#### You said that "depth buffer access isn't ready yet", what does this mean?
-
-There is a wip version that you can enable with `depthCapture = on`. It will lead to many problems especially on non nvidia hardware. Also the selected depth buffer isn't always the one you would want.
-
-#### Is there a way to change settings for reshade shaders?
-
-There is some support for it [#46](https://github.com/DadSchoorse/vkBasalt/pull/46). One easy way so to simply edit the shader file.
-
-DDS decoding accepts bounded legacy DXT1–5 and 8/16/24/32-bit raw textures, checks complete payloads including mipmaps/cubemap faces, and rejects unsupported DX10 headers. Decoded DDS storage is limited to 256 MiB, with dimensions no larger than 16384 per face. Candidate Vulkan construction checks failures and rolls back partial resources before returning to the existing graph.
+See the [vkBasalt license](LICENSE) and [ReShade license](src/reshade/LICENSE.md).
