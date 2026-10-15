@@ -13,7 +13,12 @@ int main() {
     for (const auto bad : {"nan", "inf", "1junk", "1e99", ""}) assert(decode(bad) == .25f);
     assert(decode("default") == .25f);
     opt.initializer_value.as_float[0] = .8f;
-    assert(decode("default") == .8f); // A later runtime context can have a different authored default.
+    // Compare the stored FP32 bits, not an x87 extended-precision expression.
+    // A later runtime context can have a different authored default.
+    const float changedDefault = .8f;
+    uint32_t expectedDefault;
+    std::memcpy(&expectedDefault, &changedDefault, sizeof(expectedDefault));
+    assert(shaderParameterBits(opt, "default") == expectedDefault);
     opt.type.base = reshadefx::type::t_bool;
     opt.initializer_value.as_uint[0] = 0;
     assert(shaderParameterBits(opt,"True") == 1 && shaderParameterBits(opt,"false") == 0);

@@ -1,5 +1,6 @@
 #include "logical_swapchain.hpp"
 #include <cassert>
+#include <cstring>
 #include "sharpen_specialization.hpp"
 int main() {
     for (bool hdr : {false, true}) {
@@ -8,8 +9,11 @@ int main() {
             assert(spec.values.hdr == VkBool32(hdr));
             assert(spec.info.pData == &spec.values);
             const bool changed = hdr && source.width == 2560;
-            assert(spec.values.width == (changed ? 1.0f/2560.0f : 0.0f));
-            assert(spec.values.height == (changed ? 1.0f/1440.0f : 0.0f));
+            // Check the actual FP32 specialization bytes on x87 as well as SSE.
+            const float width = changed ? 1.0f/2560.0f : 0.0f;
+            const float height = changed ? 1.0f/1440.0f : 0.0f;
+            assert(std::memcmp(&spec.values.width, &width, sizeof(width)) == 0);
+            assert(std::memcmp(&spec.values.height, &height, sizeof(height)) == 0);
         }
     }
 

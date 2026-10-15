@@ -597,6 +597,8 @@ private:
 				add_decoration(inst.result, spv::DecorationSpecId, { spec_id });
 
 				uniform_info scalar_info = info;
+				scalar_info.declared_rows = info.type.rows;
+				scalar_info.declared_columns = info.type.cols;
 				scalar_info.type.rows = 1;
 				scalar_info.type.cols = 1;
 				scalar_info.size = 4;

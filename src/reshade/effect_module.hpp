@@ -202,6 +202,9 @@ namespace reshadefx
 	/// </summary>
 	struct uniform_info
 	{
+		// Original dimensions for editor discovery after scalar specialization.
+		uint32_t declared_rows = 0;
+		uint32_t declared_columns = 0;
 		std::string name;
 		reshadefx::type type;
 		uint32_t size = 0;

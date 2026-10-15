@@ -68,3 +68,81 @@ technique T { pass { VertexShader = VS; PixelShader = PS; } }
         value = 0.125 if effect['parameters'][-1]['type'] == 'float' else 1
         with config.open('a') as f: f.write(keys[-1] + f' = {value}\n')
         assert [p['value'] for p in read()[0]['parameters']] == defaults[:-1] + [value]
+
+    # Presentation is opt-in and uses original compiler dimensions, not names
+    # or flattened component counts. Empty enum labels must preserve indices.
+    for declaration, expression, count, widget in (
+        ('uniform float3 Colour < ui_type = "color"; ui_label = "Border colour"; > = float3(0.1, 0.2, 0.3);', 'Colour.x', 3, 'color'),
+        ('uniform float4 Colour < ui_type = "color"; > = float4(0.1, 0.2, 0.3, 0.4);', 'Colour.x', 4, 'color'),
+        ('uniform float3 Colour;', 'Colour.x', 3, ''),
+        ('uniform float2 Colour < ui_type = "color"; >;', 'Colour.x', 2, ''),
+        ('uniform int3 Colour < ui_type = "color"; >;', 'Colour.x', 3, ''),
+        ('uniform float Colour < ui_type = "color"; >;', 'Colour', 1, ''),
+        ('uniform float Colour[3] < ui_type = "color"; >;', 'Colour[0]', 1, ''),
+        ('uniform float2 Colour[2] < ui_type = "color"; >;', 'Colour[0].x', 1, ''),
+        ('uniform float2x2 Colour < ui_type = "color"; >;', 'Colour[0][0]', 1, ''),
+        ('uniform float3 Colour < ui_type = "future-widget"; >;', 'Colour.x', 3, ''),
+        ('uniform float3 Colour < ui_type = 2; >;', 'Colour.x', 3, ''),
+        ('uniform float Colour < ui_type = "input"; ui_min = 0.0; ui_max = 1.0; >;', 'Colour', 1, 'input'),
+        ('uniform int Colour < ui_type = "combo"; ui_items = "First\0\0Third\0"; > = 2;', 'Colour', 1, 'combo'),
+        ('uniform uint Colour < ui_type = "radio"; ui_items = "First\0\0Third\0"; > = 2;', 'Colour', 1, 'radio'),
+        ('uniform float Colour < ui_type = "combo"; ui_items = "First\0Second\0"; >;', 'Colour', 1, ''),
+        ('uniform int2 Colour < ui_type = "combo"; ui_items = "First\0Second\0"; >;', 'Colour.x', 2, ''),
+    ):
+        shader.write_text(declaration + """
+void VS(uint id : SV_VertexID, out float4 p : SV_Position) { p = 0; }
+float4 PS(float4 p : SV_Position) : SV_Target { return """ + expression + """; }
+technique T { pass { VertexShader = VS; PixelShader = PS; } }
+""")
+        config.write_text(f'effects = A\nA = "{shader}"\n')
+        effect = read()[0]
+        assert effect['error'] is None, effect
+        parameters = effect['parameters']
+        for index, p in enumerate(parameters):
+            hint = p['presentation']
+            assert hint['count'] == count and hint['widget'] == widget, (declaration, p)
+            assert hint['component'] == (index if count > 1 else 0), p
+            assert hint['group'] == (parameters[0]['key'] if count > 1 else p['key']), p
+            assert p['key'] == f'makoShader_41_436f6c6f7572_{index}', p
+            if widget in ('combo', 'radio'):
+                assert p['items'] == ['First', '', 'Third'] and p['value'] == 2, p
+            else:
+                assert not p['items'], p
+        if 'Border colour' in declaration:
+            assert all(p['presentation']['label'] == 'Border colour' for p in parameters), parameters
+
+    shader.write_text("""
+uniform float3 BadBounds < ui_min = "invalid"; ui_max = float2(1.0, 2.0); ui_step = 0.01; >;
+void VS(uint id : SV_VertexID, out float4 p : SV_Position) { p = 0; }
+float4 PS(float4 p : SV_Position) : SV_Target { return float4(BadBounds, 1); }
+technique T { pass { VertexShader = VS; PixelShader = PS; } }
+""")
+    effect = read()[0]
+    assert effect['error'] is None, effect
+    assert [p['min'] for p in effect['parameters']] == [None, None, None], effect
+    assert [p['max'] for p in effect['parameters']] == [1, 2, None], effect
+
+    shader.write_text("""
+uniform bool Action < ui_type = "button"; ui_label = "Capture frame"; > = false;
+uniform float Locked < noedit = true; > = 1;
+uniform float Keep < noreset = true; ui_label = "Keep value"; > = 0.5;
+uniform bool3 Features < ui_label = "Features"; ui_items = "Depth\0\0Bloom\0"; >;
+uniform int Mode < ui_type = "list"; ui_items = "First\0\0Third\0"; > = 2;
+uniform float Blank < ui_label = "   "; >;
+uniform float NotText < ui_label = 7; ui_tooltip = 4; >;
+void VS(uint id : SV_VertexID, out float4 p : SV_Position) { p = 0; }
+float4 PS(float4 p : SV_Position) : SV_Target { return Action + Locked + Keep + Features.x + Mode + Blank + NotText; }
+technique T { pass { VertexShader = VS; PixelShader = PS; } }
+""")
+    effect = read()[0]
+    assert effect['error'] is None, effect
+    parameters = effect['parameters']
+    assert len(parameters) == 7, parameters
+    assert parameters[0]['label'] == 'Keep value' and parameters[0]['resettable'] is False
+    assert [p['label'] for p in parameters[1:4]] == ['Features · Depth', 'Features [2]', 'Features · Bloom']
+    assert all(p['presentation']['count'] == 1 and not p['items'] for p in parameters[1:4])
+    assert parameters[4]['items'] == ['First', '', 'Third'] and parameters[4]['presentation']['widget'] == 'list'
+    assert parameters[5]['label'] == 'Blank' and parameters[6]['label'] == 'NotText'
+    assert parameters[6]['description'] == ''
+    # Skipped controls cannot shift keys belonging to the remaining uniforms.
+    assert parameters[0]['key'] == 'makoShader_41_4b656570_0'

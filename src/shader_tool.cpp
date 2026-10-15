@@ -21,12 +21,23 @@ static const reshadefx::annotation* annotation(const reshadefx::uniform_info& un
     return nullptr;
 }
 static std::string text(const reshadefx::uniform_info& uniform, const char* name) {
-    const auto* item = annotation(uniform, name); return item ? item->value.string_data : "";
+    const auto* item = annotation(uniform, name); return item && item->type.base == reshadefx::type::t_string ? item->value.string_data : "";
+}
+static bool flag(const reshadefx::uniform_info& uniform, const char* name) {
+    const auto* item = annotation(uniform, name);
+    return item && item->type.is_scalar() && std::isfinite(shaderNumber(item->value, item->type)) && shaderNumber(item->value, item->type) != 0;
+}
+static std::vector<std::string> labels(const reshadefx::uniform_info& uniform) {
+    std::istringstream source(text(uniform, "ui_items"));
+    std::vector<std::string> result;
+    for (std::string item; std::getline(source, item, '\0');) result.push_back(item);
+    return result;
 }
 static void range(const reshadefx::uniform_info& uniform, const char* name) {
     const auto* item = annotation(uniform, name);
     if (!item) { std::cout << "null"; return; }
     const auto index = item->type.rows * item->type.cols > 1 ? uniform.offset : 0;
+    if (!item->type.is_numeric() || index >= item->type.rows * item->type.cols) { std::cout << "null"; return; }
     const double value = shaderNumber(item->value, item->type, index);
     if (std::isfinite(value)) std::cout << value; else std::cout << "null";
 }
@@ -75,14 +86,32 @@ int main(int argc, char** argv) {
             bool first = true;
             for (const auto& opt : prepared.module.spec_constants) {
                 const size_t component = components[opt.name]++;
-                const auto* hidden = annotation(opt, "hidden");
-                if (!hidden) hidden = annotation(opt, "ui_hidden");
-                if (annotation(opt, "source") || (hidden && shaderNumber(hidden->value, hidden->type) != 0)) continue;
+                auto widget = text(opt, "ui_type");
+                // Buttons are one-frame actions, not persistent settings. The
+                // specialization editor cannot implement those semantics.
+                if (annotation(opt, "source") || flag(opt, "hidden") || flag(opt, "ui_hidden") || flag(opt, "noedit") ||
+                    (opt.type.base == reshadefx::type::t_bool && widget == "button")) continue;
                 if (opt.type.base != reshadefx::type::t_bool && opt.type.base != reshadefx::type::t_float && opt.type.base != reshadefx::type::t_int && opt.type.base != reshadefx::type::t_uint) continue;
                 if (!first) std::cout << ',';
                 first = false;
-                auto label = text(opt, "ui_label"); if (label.empty()) label = opt.name;
+                auto label = text(opt, "ui_label"); if (label.find_first_not_of(" \t\r\n") == std::string::npos) label = opt.name;
+                const auto groupLabel = label;
+                // Only genuine, non-array vectors get axis/color grouping. Matrices
+                // and arrays retain their numbered scalar controls and saved keys.
+                const bool vector = !opt.type.is_array() && opt.declared_columns == 1 &&
+                    opt.declared_rows >= 2 && opt.declared_rows <= 4 && counts[opt.name] == opt.declared_rows;
+                const bool scalar = !opt.type.is_array() && opt.declared_rows == 1 && opt.declared_columns == 1;
+                const bool choices = scalar && counts[opt.name] == 1 && (opt.type.base == reshadefx::type::t_int || opt.type.base == reshadefx::type::t_uint) &&
+                    (widget == "combo" || widget == "radio" || widget == "list");
+                if (widget == "color" && (!vector || opt.type.base != reshadefx::type::t_float || opt.declared_rows < 3)) widget.clear();
+                if ((widget == "combo" || widget == "radio" || widget == "list") && !choices) widget.clear();
+                if (widget != "input" && widget != "drag" && widget != "slider" && widget != "combo" && widget != "radio" && widget != "list" && widget != "color") widget.clear();
                 if (counts[opt.name] > 1) label += " [" + std::to_string(component + 1) + "]";
+                const auto items = labels(opt);
+                // Boolean ui_items name checkbox components, never enum values.
+                if (vector && opt.type.base == reshadefx::type::t_bool && text(opt, "ui_type") != "combo" &&
+                    items.size() == counts[opt.name] && !items[component].empty()) label = groupLabel + " · " + items[component];
+                const bool grouped = vector && opt.type.base != reshadefx::type::t_bool;
                 auto value = opt.initializer_value;
                 const auto saved = shaderParameterValue(config, effect, opt.name, component);
                 if (!saved.empty()) value.as_uint[0] = shaderParameterBits(opt, saved);
@@ -96,9 +125,12 @@ int main(int argc, char** argv) {
                           << ",\"min\":"; range(opt, "ui_min"); std::cout << ",\"max\":"; range(opt, "ui_max");
                 std::cout << ",\"step\":"; range(opt, "ui_step");
                 std::cout << ",\"items\":[";
-                std::istringstream items(text(opt,"ui_items")); std::string item; bool firstItem = true;
-                while (std::getline(items, item, '\0')) { if (item.empty()) continue; if (!firstItem) std::cout << ','; firstItem = false; std::cout << json(item); }
-                std::cout << "]}";
+                if (choices) for (size_t i = 0; i < items.size(); ++i) { if (i) std::cout << ','; std::cout << json(items[i]); }
+                std::cout << "],\"resettable\":" << (flag(opt, "noreset") ? "false" : "true") << ",\"presentation\":{\"widget\":" << json(widget)
+                          << ",\"group\":" << json(shaderParameterKey(effect, opt.name, grouped ? 0 : component))
+                          << ",\"label\":" << json(grouped ? groupLabel : label)
+                          << ",\"component\":" << (grouped ? component : 0)
+                          << ",\"count\":" << (grouped ? counts[opt.name] : 1) << "}}";
             }
             std::cout << "],\"error\":null";
         } catch (const std::exception& e) { std::cout << ",\"parameters\":[],\"error\":" << json(e.what()); }
