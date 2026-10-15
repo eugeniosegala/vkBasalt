@@ -1,5 +1,9 @@
 # vkBasalt
 
+<p align="center">
+  <img src="assets/mako-vkbasalt.webp" width="256" alt="MAKO shark splitting light through a prism into vkBasalt shader effects" />
+</p>
+
 A Vulkan post-processing layer for Linux, with sharpening, anti-aliasing, colour LUTs, and ReShade FX shaders. Works with native Vulkan games, DXVK, and vkd3d.
 
 This is the [MAKO](https://github.com/eugeniosegala/MAKO) fork of [DadSchoorse/vkBasalt](https://github.com/DadSchoorse/vkBasalt), adding live effect changes, HDR processing, and verified 64-bit and 32-bit release bundles.
