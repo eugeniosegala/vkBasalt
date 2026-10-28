@@ -771,6 +771,13 @@ namespace vkBasalt
         return VK_TRUE;
     }
 
+    // MAKO ABI: this build keeps its effect views valid when the swapchain
+    // requests storage usage, so the layer above may write the images this
+    // layer exposes as storage images.
+    VkBool32 VKAPI_CALL makoSwapchainStorageUsageSupportedV1(VkDevice device) {
+        return device != VK_NULL_HANDLE ? VK_TRUE : VK_FALSE;
+    }
+
     VKAPI_ATTR VkResult VKAPI_CALL vkBasalt_GetSwapchainImagesKHR(VkDevice       device,
                                                                   VkSwapchainKHR swapchain,
                                                                   uint32_t*      pCount,
@@ -1155,6 +1162,8 @@ extern "C"
             return reinterpret_cast<PFN_vkVoidFunction>(&vkBasalt::makoSetSwapchainHdrPrecisionV1);
         if (!std::strcmp(pName, "makoSetSwapchainColorSpaceV1"))
             return reinterpret_cast<PFN_vkVoidFunction>(&vkBasalt::makoSetSwapchainColorSpaceV1);
+        if (!std::strcmp(pName, "makoSwapchainStorageUsageSupportedV1"))
+            return reinterpret_cast<PFN_vkVoidFunction>(&vkBasalt::makoSwapchainStorageUsageSupportedV1);
         INTERCEPT_CALLS
 
         {
@@ -1176,6 +1185,8 @@ extern "C"
             return reinterpret_cast<PFN_vkVoidFunction>(&vkBasalt::makoSetSwapchainHdrPrecisionV1);
         if (!std::strcmp(pName, "makoSetSwapchainColorSpaceV1"))
             return reinterpret_cast<PFN_vkVoidFunction>(&vkBasalt::makoSetSwapchainColorSpaceV1);
+        if (!std::strcmp(pName, "makoSwapchainStorageUsageSupportedV1"))
+            return reinterpret_cast<PFN_vkVoidFunction>(&vkBasalt::makoSwapchainStorageUsageSupportedV1);
         INTERCEPT_CALLS
 
         {

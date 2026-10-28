@@ -59,13 +59,15 @@ namespace vkBasalt
         edgeImages  = std::vector<VkImage>(edgeAndBlendImages.begin(), edgeAndBlendImages.begin() + edgeAndBlendImages.size() / 2);
         blendImages = std::vector<VkImage>(edgeAndBlendImages.begin() + edgeAndBlendImages.size() / 2, edgeAndBlendImages.end());
 
-        inputImageViews = createImageViews(pLogicalDevice, format, inputImages);
+        inputImageViews = createImageViews(pLogicalDevice, format, inputImages,
+                                           VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, effectImageViewUsage);
         Logger::debug("created input ImageViews");
         edgeImageViews = createImageViews(pLogicalDevice, VK_FORMAT_B8G8R8A8_UNORM, edgeImages);
         Logger::debug("created edge  ImageViews");
         blendImageViews = createImageViews(pLogicalDevice, VK_FORMAT_B8G8R8A8_UNORM, blendImages);
         Logger::debug("created blend ImageViews");
-        outputImageViews = createImageViews(pLogicalDevice, format, outputImages);
+        outputImageViews = createImageViews(pLogicalDevice, format, outputImages,
+                                            VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, effectImageViewUsage);
         Logger::debug("created output ImageViews");
         sampler = createSampler(pLogicalDevice);
         Logger::debug("created sampler");

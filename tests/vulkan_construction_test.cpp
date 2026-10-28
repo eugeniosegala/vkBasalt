@@ -2,6 +2,7 @@
 #include "effect_cas.hpp"
 #include "effect_dls.hpp"
 #include "image.hpp"
+#include "image_view.hpp"
 #include "logical_swapchain.hpp"
 #include <filesystem>
 #include <fstream>
@@ -20,6 +21,7 @@ namespace vkBasalt
     VkBool32 VKAPI_CALL makoSetSwapchainSharpenSourceExtentV1(VkDevice, VkSwapchainKHR, uint32_t, uint32_t);
     VkBool32 VKAPI_CALL makoSetSwapchainHdrPrecisionV1(VkDevice, VkSwapchainKHR, VkBool32);
     VkBool32 VKAPI_CALL makoSetSwapchainColorSpaceV1(VkDevice, VkSwapchainKHR, VkColorSpaceKHR);
+    VkBool32 VKAPI_CALL makoSwapchainStorageUsageSupportedV1(VkDevice);
     extern std::shared_ptr<Config>                                               pConfig;
     std::shared_ptr<EffectGraph>                                                 buildEffectGraph(LogicalSwapchain*, const std::vector<std::string>&);
     std::shared_ptr<Effect> createConfiguredEffect(LogicalSwapchain*, const std::string&,
@@ -44,6 +46,7 @@ namespace
     std::vector<VkBool32> fragmentSpecializations;
     std::vector<float> fragmentFootprints;
     std::vector<VkFormat> imageViewFormats;
+    std::vector<VkImageUsageFlags> imageViewUsages;
     size_t sampledOutputDependencies = 0;
     // Vulkan uses pointers for non-dispatchable handles on 64-bit and uint64_t
     // on 32-bit. Keep the fault tracker independent of that representation.
@@ -113,6 +116,11 @@ namespace
         d.vkd.CreateImageView = +[](VkDevice device, const VkImageViewCreateInfo* info,
                                     const VkAllocationCallbacks* allocator, VkImageView* view) {
             imageViewFormats.push_back(info->format);
+            VkImageUsageFlags declared = 0;
+            for (auto* node = static_cast<const VkBaseInStructure*>(info->pNext); node; node = node->pNext)
+                if (node->sType == VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO)
+                    declared = reinterpret_cast<const VkImageViewUsageCreateInfo*>(node)->usage;
+            imageViewUsages.push_back(declared);
             return Mock<PFN_vkCreateImageView>::create(device, info, allocator, view);
         };
         CREATE(CreateFence);
@@ -305,6 +313,10 @@ int main()
         assert(!handoff(device->device, handle, VK_COLOR_SPACE_HDR10_HLG_EXT));
         assert(handoff(device->device, handle, VK_COLOR_SPACE_HDR10_ST2084_EXT));
         assert(swapchain->hdr());
+        using StorageUsage = VkBool32 (VKAPI_PTR *)(VkDevice);
+        static_assert(std::is_same_v<decltype(&vkBasalt::makoSwapchainStorageUsageSupportedV1), StorageUsage>);
+        assert(vkBasalt::makoSwapchainStorageUsageSupportedV1(device->device));
+        assert(!vkBasalt::makoSwapchainStorageUsageSupportedV1(VK_NULL_HANDLE));
         using SourceHandoff = VkBool32 (VKAPI_PTR *)(VkDevice, VkSwapchainKHR, uint32_t, uint32_t);
         static_assert(std::is_same_v<decltype(&vkBasalt::makoSetSwapchainSharpenSourceExtentV1), SourceHandoff>);
         const auto source = &vkBasalt::makoSetSwapchainSharpenSourceExtentV1;
@@ -356,6 +368,17 @@ int main()
     setenv("VKBASALT_LOG_LEVEL", "none", 1);
     vkBasalt::Config              config;
     auto                          d = driver();
+    {
+        // A declared usage restricts the view; zero keeps inherited usage.
+        const auto image = handleFromValue<VkImage>(31);
+        imageViewUsages.clear();
+        auto restricted = vkBasalt::createImageViews(&d, VK_FORMAT_B8G8R8A8_SRGB, {image},
+            VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, vkBasalt::effectImageViewUsage);
+        auto inherited = vkBasalt::createImageViews(&d, VK_FORMAT_B8G8R8A8_UNORM, {image});
+        assert((imageViewUsages == std::vector<VkImageUsageFlags>{vkBasalt::effectImageViewUsage, 0}));
+        d.vkd.DestroyImageView(d.device, restricted[0], nullptr);
+        d.vkd.DestroyImageView(d.device, inherited[0], nullptr);
+    }
     vkBasalt::CheckedConstruction checked;
     auto                          exercise = [&](auto build) {
         size_t total = 0;
@@ -505,6 +528,7 @@ technique Tone {
                 failAt                                         = failure;
                 swapchain.effectSelectionRevision              = UINT64_MAX;
                 imageViewFormats.clear();
+                imageViewUsages.clear();
                 sampledOutputDependencies = 0;
                 fragmentFootprints.clear();
                 vkBasalt::updateLiveEffectGraph(&swapchain);
@@ -514,6 +538,12 @@ technique Tone {
                     total = calls;
                     assert(swapchain.activeEffectGraph != previous);
                     assert(sampledOutputDependencies >= 3);
+                    // Views of the application-facing images declare only the
+                    // usage effects need, so an sRGB view stays valid when the
+                    // layer above requests storage usage on the swapchain.
+                    assert(imageViewUsages.size() >= 2);
+                    for (size_t i = 0; i < 2; ++i)
+                        assert(imageViewUsages[i] == vkBasalt::effectImageViewUsage);
                     if (selection == "CustomTone:cas")
                         assert((fragmentFootprints == std::vector<float>{
                             swapchain.hdr() ? 1.0f/160.0f : 0.0f,

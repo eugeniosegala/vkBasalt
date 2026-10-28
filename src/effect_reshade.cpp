@@ -68,11 +68,15 @@ namespace vkBasalt
             inputFormat = format;
         const auto inputFormatUNORM = convertToUNORM(inputFormat);
         const auto inputFormatSRGB = convertToSRGB(inputFormat);
-        inputImageViewsSRGB  = createImageViews(pLogicalDevice, inputFormatSRGB, inputImages);
-        inputImageViewsUNORM = createImageViews(pLogicalDevice, inputFormatUNORM, inputImages);
+        inputImageViewsSRGB  = createImageViews(pLogicalDevice, inputFormatSRGB, inputImages,
+                                                VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, effectImageViewUsage);
+        inputImageViewsUNORM = createImageViews(pLogicalDevice, inputFormatUNORM, inputImages,
+                                                VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, effectImageViewUsage);
         Logger::debug("created input ImageViews");
-        outputImageViewsSRGB  = createImageViews(pLogicalDevice, inputOutputFormatSRGB, outputImages);
-        outputImageViewsUNORM = createImageViews(pLogicalDevice, inputOutputFormatUNORM, outputImages);
+        outputImageViewsSRGB  = createImageViews(pLogicalDevice, inputOutputFormatSRGB, outputImages,
+                                                 VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, effectImageViewUsage);
+        outputImageViewsUNORM = createImageViews(pLogicalDevice, inputOutputFormatUNORM, outputImages,
+                                                 VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, effectImageViewUsage);
         Logger::debug("created ImageViews");
 
         module = std::move(compiledModule.module);

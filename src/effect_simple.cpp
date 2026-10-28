@@ -36,9 +36,11 @@ namespace vkBasalt
         this->pConfig        = pConfig;
         this->dynamicUniformSize = dynamicUniformSize;
 
-        inputImageViews = createImageViews(pLogicalDevice, inputFormat == VK_FORMAT_UNDEFINED ? format : inputFormat, inputImages);
+        inputImageViews = createImageViews(pLogicalDevice, inputFormat == VK_FORMAT_UNDEFINED ? format : inputFormat, inputImages,
+                                           VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, effectImageViewUsage);
         Logger::debug("created input ImageViews");
-        outputImageViews = createImageViews(pLogicalDevice, format, outputImages);
+        outputImageViews = createImageViews(pLogicalDevice, format, outputImages,
+                                            VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_COLOR_BIT, 1, effectImageViewUsage);
         Logger::debug("created ImageViews");
         sampler = createSampler(pLogicalDevice);
         Logger::debug("created sampler");

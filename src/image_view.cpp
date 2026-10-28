@@ -7,7 +7,8 @@ namespace vkBasalt
                                               std::vector<VkImage> images,
                                               VkImageViewType      viewType,
                                               VkImageAspectFlags   aspectMask,
-                                              uint32_t             mipLevels)
+                                              uint32_t             mipLevels,
+                                              VkImageUsageFlags    usage)
     {
         std::vector<VkImageView> imageViews(images.size());
         ScopeExit rollback([&] {
@@ -15,10 +16,14 @@ namespace vkBasalt
                 pLogicalDevice->vkd.DestroyImageView(pLogicalDevice->device, handle, nullptr);
         });
 
+        VkImageViewUsageCreateInfo usageCreateInfo{};
+        usageCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
+        usageCreateInfo.usage = usage;
+
         VkImageViewCreateInfo imageViewCreateInfo;
 
         imageViewCreateInfo.sType        = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        imageViewCreateInfo.pNext        = nullptr;
+        imageViewCreateInfo.pNext        = usage ? &usageCreateInfo : nullptr;
         imageViewCreateInfo.flags        = 0;
         imageViewCreateInfo.image        = VK_NULL_HANDLE;
         imageViewCreateInfo.viewType     = viewType;

@@ -22,6 +22,16 @@ Depth-sampling graphs track per-image submission fences and wait before replacin
 
 A failed depth-graph replacement stops further shader submissions instead of reusing invalid commands. Vulkan core/KHR `BindImageMemory2` images remain untracked for depth sampling. These lifetime rules apply to both SDR and HDR; [shader compatibility limits](CONFIGURATION.md#reshade-fx-shaders) still apply.
 
+## Swapchain storage usage
+
+MAKO Renderer can write its spatial reconstruction straight into the images this layer exposes, which needs storage usage on the swapchain. The application-facing and intermediate images inherit the requested usage, storage included, and stay mutable-format with an sRGB sibling. Effect input and output views therefore declare only sampled and colour-attachment usage through `VkImageViewUsageCreateInfo`, so sRGB views stay valid. MAKO detects this behaviour through:
+
+```c
+VkBool32 makoSwapchainStorageUsageSupportedV1(VkDevice);
+```
+
+It returns `VK_TRUE` for a valid device. Older builds lack the entry point, and MAKO keeps its copy-based path with them.
+
 ## Presentation cost
 
 MAKO Renderer's Frame Generation layer sits above vkBasalt, so effects run on every real and generated output. GPU cost therefore scales with the Frame Generation multiplier.
