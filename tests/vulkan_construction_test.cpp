@@ -9,6 +9,8 @@
 #include <unistd.h>
 #include "buffer.hpp"
 #include <cassert>
+#include <chrono>
+#include <future>
 #include <iostream>
 #include <set>
 #include <tuple>
@@ -30,6 +32,9 @@ namespace vkBasalt
     void                                                                         updateLiveEffectGraph(LogicalSwapchain*);
     extern std::unordered_map<void*, std::shared_ptr<LogicalDevice>>             deviceMap;
     extern std::unordered_map<VkSwapchainKHR, std::shared_ptr<LogicalSwapchain>> swapchainMap;
+    extern std::unordered_map<void*, InstanceDispatch> instanceDispatchMap;
+    VkResult VKAPI_CALL vkBasalt_CreateSwapchainKHR(VkDevice, const VkSwapchainCreateInfoKHR*, const VkAllocationCallbacks*, VkSwapchainKHR*);
+    VkResult VKAPI_CALL vkBasalt_EnumerateDeviceExtensionProperties(VkPhysicalDevice, const char*, uint32_t*, VkExtensionProperties*);
     VkResult vkBasalt_GetSwapchainImagesKHR(VkDevice, VkSwapchainKHR, uint32_t*, VkImage*);
 } // namespace vkBasalt
 namespace
@@ -292,8 +297,47 @@ namespace
     }
 } // namespace
 
+// Simulate the Vulkan loader enumerating extensions while another thread is in
+// its lower swapchain creation call. Both operations must be able to finish.
+static void testConcurrentSwapchainCreationAndEnumeration()
+{
+    using namespace vkBasalt;
+    void* key = &key;
+    const auto handle = reinterpret_cast<VkDevice>(&key);
+    auto device = std::make_shared<LogicalDevice>();
+    device->device = handle;
+    device->supportsMutableFormat = false;
+    instanceDispatchMap[key].EnumerateDeviceExtensionProperties =
+        [](VkPhysicalDevice, const char*, uint32_t* count, VkExtensionProperties*) {
+            *count = 0;
+            return VK_SUCCESS;
+        };
+    device->vkd.CreateSwapchainKHR = [](VkDevice device, const VkSwapchainCreateInfoKHR*, const VkAllocationCallbacks*, VkSwapchainKHR* swapchain) {
+        auto enumeration = std::async(std::launch::async, [device]() {
+            uint32_t count = 1;
+            const auto result = vkBasalt_EnumerateDeviceExtensionProperties(
+                reinterpret_cast<VkPhysicalDevice>(device), nullptr, &count, nullptr);
+            return result == VK_SUCCESS && count == 0;
+        });
+        if (enumeration.wait_for(std::chrono::seconds(3)) != std::future_status::ready || !enumeration.get())
+            std::abort();
+        *swapchain = handleFromValue<VkSwapchainKHR>(1);
+        return VK_SUCCESS;
+    };
+    deviceMap[key] = device;
+    VkSwapchainCreateInfoKHR info{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
+    info.imageFormat = VK_FORMAT_B8G8R8A8_UNORM;
+    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+    const auto result = vkBasalt_CreateSwapchainKHR(handle, &info, nullptr, &swapchain);
+    assert(result == VK_SUCCESS && swapchainMap.at(swapchain)->pLogicalDevice == device.get());
+    swapchainMap.erase(swapchain);
+    deviceMap.erase(key);
+    instanceDispatchMap.erase(key);
+}
+
 int main()
 {
+    testConcurrentSwapchainCreationAndEnumeration();
     // Independently declared MAKO v1 ABI: explicit colour, correct owner and
     // pre-exposure lifetime are required, including handle reuse.
     {

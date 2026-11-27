@@ -14,6 +14,8 @@ Retiring old graphs bounds effect-owned image and pipeline memory. Shorter chain
 
 ## Synchronization and resource lifetime
 
+Swapchain creation retains the device under the registry lock, releases the lock before calling the next Vulkan layer, and reacquires it to register the new swapchain. This lets a concurrent Vulkan loader extension query finish while the presentation system creates a swapchain.
+
 Multi-pass ReShade effects synchronize colour-attachment writes and layout transitions before later sampling, including ping-pong target reuse. The dependency applies to SDR and HDR without adding an image, draw, or CPU wait. Stencil attachments are allocated only when a selected pass enables stencil.
 
 Colour-only graphs neither reference game depth images nor rebuild commands when those images change. They allocate no depth fences and add no per-frame fence operation.

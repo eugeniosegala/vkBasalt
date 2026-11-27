@@ -672,11 +672,15 @@ namespace vkBasalt
                                                                const VkAllocationCallbacks*    pAllocator,
                                                                VkSwapchainKHR*                 pSwapchain)
     {
-        scoped_lock l(globalLock);
-
         Logger::trace("vkCreateSwapchainKHR");
 
-        LogicalDevice* pLogicalDevice = deviceMap[GetKey(device)].get();
+        // The loader can enumerate device extensions on another thread while holding
+        // its own lock. Keep our registry lock out of the downstream WSI call.
+        std::shared_ptr<LogicalDevice> pLogicalDevice;
+        {
+            scoped_lock l(globalLock);
+            pLogicalDevice = deviceMap.at(GetKey(device));
+        }
 
         VkSwapchainCreateInfoKHR modifiedCreateInfo = *pCreateInfo;
 
@@ -708,7 +712,7 @@ namespace vkBasalt
 
         Logger::debug("format " + std::to_string(modifiedCreateInfo.imageFormat));
         std::shared_ptr<LogicalSwapchain> pLogicalSwapchain(new LogicalSwapchain());
-        pLogicalSwapchain->pLogicalDevice      = pLogicalDevice;
+        pLogicalSwapchain->pLogicalDevice      = pLogicalDevice.get();
         pLogicalSwapchain->swapchainCreateInfo = *pCreateInfo;
         pLogicalSwapchain->imageExtent         = modifiedCreateInfo.imageExtent;
         pLogicalSwapchain->format              = modifiedCreateInfo.imageFormat;
@@ -718,7 +722,10 @@ namespace vkBasalt
         VkResult result = pLogicalDevice->vkd.CreateSwapchainKHR(device, &modifiedCreateInfo, pAllocator, pSwapchain);
 
         if (result == VK_SUCCESS)
-            swapchainMap[*pSwapchain] = pLogicalSwapchain;
+        {
+            scoped_lock l(globalLock);
+            swapchainMap[*pSwapchain] = std::move(pLogicalSwapchain);
+        }
 
         return result;
     }
